@@ -1,12 +1,12 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Derived, KIND_LABEL, STATUS_LABEL, Status } from '../types';
-import { useTaskStore } from '../store/useTaskStore';
+import { useTaskStore, useCanvasTasks } from '../store/useTaskStore';
 import { descendantsOf, durationOf, topoSort } from '../lib/schedule';
 import { formatCN } from '../lib/date';
 import { StatusPill } from './common';
 
 export default function TaskPanel({ derived }: { derived: Record<string, Derived> }) {
-  const tasks = useTaskStore((s) => s.tasks);
+  const tasks = useCanvasTasks();
   const selectedId = useTaskStore((s) => s.selectedId);
   const updateTask = useTaskStore((s) => s.updateTask);
   const setProgress = useTaskStore((s) => s.setProgress);
@@ -20,9 +20,16 @@ export default function TaskPanel({ derived }: { derived: Record<string, Derived
   const setView = useTaskStore((s) => s.setView);
   const setKind = useTaskStore((s) => s.setKind);
   const toggleCalendar = useTaskStore((s) => s.toggleCalendar);
+  const settings = useTaskStore((s) => s.settings);
+  /** 具体起止时间：默认折叠；已有时间或设置开启时自动展开 */
+  const [showTime, setShowTime] = useState(false);
 
   const task = tasks.find((t) => t.id === selectedId) ?? null;
   const d = task ? derived[task.id] : undefined;
+
+  useEffect(() => {
+    if (task) setShowTime(!!(task.startTime || task.endTime) || settings.timesExpanded);
+  }, [task, settings.timesExpanded]);
 
   const depCandidates = useMemo(() => {
     if (!task) return [];
@@ -128,8 +135,26 @@ export default function TaskPanel({ derived }: { derived: Record<string, Derived
         </div>
         <div>
           <label>截止日期</label>
-          <input type="date" value={task.dueDate} onChange={(e) => e.target.value && setDates(task.id, task.startDate, e.target.value, { source: 'panel', action: '修改截止日', detail: `${task.title} → ${e.target.value}` })} />
+          <input type="date" value={task.dueDate}               onChange={(e) => e.target.value && setDates(task.id, task.startDate, e.target.value, { source: 'panel', action: '修改截止日', detail: `${task.title} → ${e.target.value}` })} />
         </div>
+      </div>
+
+      <div className="time-toggle-row">
+        <button className="time-toggle" onClick={() => setShowTime((v) => !v)} title="设置具体起止时间（默认不填）">
+          🕒 具体时间（开始/结束时刻）{showTime ? ' ▾' : ' ▸'}
+        </button>
+        {showTime && (
+          <div className="time-inputs">
+            <label>
+              开始时刻
+              <input type="time" value={task.startTime ?? ''} onChange={(e) => updateTask(task.id, { startTime: e.target.value }, { source: 'panel', action: '修改开始时间', detail: task.title })} />
+            </label>
+            <label>
+              结束时刻
+              <input type="time" value={task.endTime ?? ''} onChange={(e) => updateTask(task.id, { endTime: e.target.value }, { source: 'panel', action: '修改结束时间', detail: task.title })} />
+            </label>
+          </div>
+        )}
       </div>
 
       <label>父任务（思维导图层级）</label>

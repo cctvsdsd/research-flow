@@ -1,5 +1,5 @@
 import { Derived, Source } from '../types';
-import { useTaskStore } from '../store/useTaskStore';
+import { useTaskStore, useCanvasTasks } from '../store/useTaskStore';
 
 const SRC_LABEL: Record<Source, string> = {
   mind: '思维导图',
@@ -12,7 +12,7 @@ const SRC_LABEL: Record<Source, string> = {
 
 export default function StatusBar({ derived }: { derived: Record<string, Derived> }) {
   const log = useTaskStore((s) => s.log);
-  const tasks = useTaskStore((s) => s.tasks);
+  const tasks = useCanvasTasks();
   const last = log[0];
 
   const critical = Object.values(derived).filter((d) => d.critical).length;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { Derived } from '../types';
 import { STATUS_COLOR } from '../types';
 import { useTaskStore } from '../store/useTaskStore';
+import { useCanvasTasks } from '../store/useTaskStore';
 import { addDays, diffDays, isWeekend, maxDate, minDate, parseDate, today } from '../lib/date';
 import { flattenTree } from '../lib/schedule';
 import { durationOf } from '../lib/schedule';
@@ -13,7 +14,7 @@ type DragMode = 'move' | 'l' | 'r' | 'progress';
 export default function GanttView({ derived, compact }: { derived: Record<string, Derived>; compact?: boolean }) {
   const LEFT_W = compact ? 148 : 268;
 
-  const tasks = useTaskStore((s) => s.tasks);
+  const tasks = useCanvasTasks();
   const collapsed = useTaskStore((s) => s.collapsed);
   const dayWidth = useTaskStore((s) => s.dayWidth);
   const selectedId = useTaskStore((s) => s.selectedId);

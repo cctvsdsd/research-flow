@@ -36,11 +36,13 @@ export function onCloudStatus(cb: (s: CloudStatus) => void) {
   return () => listeners.delete(cb);
 }
 
-function signature(data: { tasks?: unknown[]; trash?: unknown[]; collapsed?: unknown }): string {
+function signature(data: { tasks?: unknown[]; trash?: unknown[]; collapsed?: unknown; settings?: unknown; positions?: unknown }): string {
   const t = JSON.stringify(data?.tasks ?? []);
   const r = JSON.stringify(data?.trash ?? []);
   const c = JSON.stringify(data?.collapsed ?? {});
-  return `${t.length}:${t.slice(0, 40)}|${r.length}:${r.slice(0, 40)}|${c.length}`;
+  const st = JSON.stringify(data?.settings ?? {});
+  const p = JSON.stringify(data?.positions ?? {});
+  return `${t.length}:${t.slice(0, 40)}|${r.length}:${r.slice(0, 40)}|${c.length}|${st.length}|${p.length}`;
 }
 
 function payload() {
@@ -58,6 +60,10 @@ function payload() {
     hideDone: s.hideDone,
     panelOpen: s.panelOpen,
     trash: s.trash,
+    canvases: s.canvases,
+    currentCanvasId: s.currentCanvasId,
+    settings: s.settings,
+    positions: s.positions,
   };
 }
 
@@ -77,6 +83,10 @@ async function pull(): Promise<boolean> {
         hideDone: data.hideDone,
         panelOpen: data.panelOpen,
         trash: (data.trash ?? []) as TrashItem[],
+        canvases: data.canvases,
+        currentCanvasId: data.currentCanvasId,
+        settings: data.settings,
+        positions: data.positions,
       });
       localRev = Number(data.rev) || 0;
       lastSig = signature(data);
@@ -152,7 +162,11 @@ function startWatching() {
       next.dayWidth === prev.dayWidth &&
       next.hideDone === prev.hideDone &&
       next.panelOpen === prev.panelOpen &&
-      next.trash === prev.trash
+      next.trash === prev.trash &&
+      next.canvases === prev.canvases &&
+      next.currentCanvasId === prev.currentCanvasId &&
+      next.settings === prev.settings &&
+      next.positions === prev.positions
     ) {
       return;
     }
@@ -170,6 +184,10 @@ function pickRelevant(s: ReturnType<typeof useTaskStore.getState>) {
     hideDone: s.hideDone,
     panelOpen: s.panelOpen,
     trash: s.trash,
+    canvases: s.canvases,
+    currentCanvasId: s.currentCanvasId,
+    settings: s.settings,
+    positions: s.positions,
   };
 }
 

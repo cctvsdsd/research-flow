@@ -1,6 +1,7 @@
+import { useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { DEFAULT_SHOW_IN_CALENDAR, LogEntry, Source, Task, TaskKind, TrashItem, ViewId } from '../types';
+import { Canvas, DEFAULT_CANVAS_ID, DEFAULT_SETTINGS, DEFAULT_SHOW_IN_CALENDAR, LogEntry, Settings, Source, Task, TaskKind, TrashItem, ViewId } from '../types';
 import { addDays, diffDays, maxDate, today } from '../lib/date';
 import { descendantsOf, flattenTree, normalize, topoSort } from '../lib/schedule';
 import { blankTasks, sampleTasks } from '../lib/sample';
@@ -30,6 +31,13 @@ interface State {
   /** 框选出来的多选集合（思维导图框选 / 批量操作） */
   selectedIds: string[];
   view: ViewId;
+  /** 多画布：画布列表与当前画布 id */
+  canvases: Canvas[];
+  currentCanvasId: string;
+  /** 全局默认参数（设置面板） */
+  settings: Settings;
+  /** 思维导图节点手动摆放位置（按任务 id），持久化；有则优先于自动布局 */
+  positions: Record<string, { x: number; y: number }>;
   collapsed: Record<string, boolean>;
   dayWidth: number;
   log: LogEntry[];
@@ -46,6 +54,13 @@ interface State {
   lastCoalesce: { key: string; ts: number } | null;
 
   setView: (v: ViewId) => void;
+  setCurrentCanvas: (id: string) => void;
+  addCanvas: (name: string) => string;
+  renameCanvas: (id: string, name: string) => void;
+  removeCanvas: (id: string) => void;
+  setSettings: (patch: Partial<Settings>) => void;
+  setPosition: (id: string, pos: { x: number; y: number }) => void;
+  resetLayout: () => void;
   select: (id: string | null) => void;
   setSelection: (ids: string[]) => void;
   toggleCollapse: (id: string) => void;
@@ -89,7 +104,7 @@ interface State {
 
   resetSample: () => void;
   clearAll: () => void;
-  importTasks: (tasks: Task[]) => void;
+  importTasks: (tasks: Task[], canvasId?: string) => void;
   /** 从同步文件整份载入（保留日历显隐、回收站、视图等所有持久化字段） */
   loadSync: (payload: {
     tasks: Task[];
@@ -99,6 +114,10 @@ interface State {
     hideDone?: boolean;
     panelOpen?: boolean;
     trash?: TrashItem[];
+    canvases?: Canvas[];
+    currentCanvasId?: string;
+    settings?: Partial<Settings>;
+    positions?: Record<string, { x: number; y: number }>;
   }) => void;
 }
 
@@ -120,6 +139,8 @@ function changedIds(before: Task[], after: Task[]): string[] {
       o.title !== t.title ||
       o.startDate !== t.startDate ||
       o.dueDate !== t.dueDate ||
+      o.startTime !== t.startTime ||
+      o.endTime !== t.endTime ||
       o.progress !== t.progress ||
       o.parentId !== t.parentId ||
       o.status !== t.status ||
@@ -127,6 +148,7 @@ function changedIds(before: Task[], after: Task[]): string[] {
       o.note !== t.note ||
       o.kind !== t.kind ||
       o.showInCalendar !== t.showInCalendar ||
+      o.canvasId !== t.canvasId ||
       o.dependsOn.join(',') !== t.dependsOn.join(',')
     ) {
       ids.add(id);
@@ -134,6 +156,38 @@ function changedIds(before: Task[], after: Task[]): string[] {
   }
   for (const id of b.keys()) if (!a.has(id)) ids.add(id);
   return [...ids];
+}
+
+/** 给缺失 canvasId 的任务补上画布 id（旧数据 / 示例迁移用） */
+function withCanvas(tasks: Task[], canvasId: string): Task[] {
+  return tasks.map((t) => (t.canvasId ? t : { ...t, canvasId }));
+}
+
+/** 把任意来源的任务数组 + 配套字段，迁移到当前多画布结构（缺啥补啥） */
+function migratePayload(input: {
+  tasks?: Task[];
+  canvases?: Canvas[];
+  currentCanvasId?: string;
+  settings?: Partial<Settings>;
+  positions?: Record<string, { x: number; y: number }>;
+}): {
+  tasks: Task[];
+  canvases: Canvas[];
+  currentCanvasId: string;
+  settings: Settings;
+  positions: Record<string, { x: number; y: number }>;
+} {
+  const rawTasks = input.tasks ?? [];
+  let canvases = input.canvases && input.canvases.length ? input.canvases : [{ id: DEFAULT_CANVAS_ID, name: '画布 1' }];
+  // 旧数据没有画布：把所有任务归入默认画布
+  const hasCanvas = rawTasks.some((t) => t.canvasId);
+  const tasks = hasCanvas ? withCanvas(rawTasks, DEFAULT_CANVAS_ID) : withCanvas(rawTasks, canvases[0].id);
+  const ids = new Set(canvases.map((c) => c.id));
+  if (!ids.has(DEFAULT_CANVAS_ID)) canvases = [{ id: DEFAULT_CANVAS_ID, name: '画布 1' }, ...canvases];
+  const currentCanvasId = input.currentCanvasId && ids.has(input.currentCanvasId) ? input.currentCanvasId : canvases[0].id;
+  const settings = { ...DEFAULT_SETTINGS, ...(input.settings ?? {}) };
+  const positions = input.positions ?? {};
+  return { tasks, canvases, currentCanvasId, settings, positions };
 }
 
 export const useTaskStore = create<State>()(
@@ -225,10 +279,14 @@ export const useTaskStore = create<State>()(
       };
 
       return {
-        tasks: normalize(blankTasks()),
+        tasks: withCanvas(normalize(blankTasks()), DEFAULT_CANVAS_ID),
         selectedId: 'ROOT',
         selectedIds: ['ROOT'],
         view: 'all',
+        canvases: [{ id: DEFAULT_CANVAS_ID, name: '画布 1' }],
+        currentCanvasId: DEFAULT_CANVAS_ID,
+        settings: DEFAULT_SETTINGS,
+        positions: {},
         collapsed: {},
         dayWidth: 22,
         log: [],
@@ -240,6 +298,47 @@ export const useTaskStore = create<State>()(
         lastCoalesce: null,
 
         setView: (v) => set({ view: v }),
+
+        setCurrentCanvas: (id) =>
+          set((s) => (s.canvases.some((c) => c.id === id) ? { currentCanvasId: id, selectedId: null, selectedIds: [] } : {})),
+
+        addCanvas: (name) => {
+          const id = `cv${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+          set((s) => ({
+            canvases: [...s.canvases, { id, name: name.trim() || `画布 ${s.canvases.length + 1}` }],
+            currentCanvasId: id,
+            selectedId: null,
+            selectedIds: [],
+          }));
+          return id;
+        },
+
+        renameCanvas: (id, name) =>
+          set((s) => ({ canvases: s.canvases.map((c) => (c.id === id ? { ...c, name: name.trim() || c.name } : c)) })),
+
+        removeCanvas: (id) => {
+          const s = get();
+          if (s.canvases.length <= 1) return; // 至少保留一个画布
+          const doomed = new Set(s.tasks.filter((t) => t.canvasId === id).map((t) => t.id));
+          if (doomed.size) trashBatch([...doomed], { source: 'system', action: '删除画布（数据入回收站）', detail: s.canvases.find((c) => c.id === id)?.name ?? id }, `画布「${s.canvases.find((c) => c.id === id)?.name ?? id}」`);
+          const canvases = s.canvases.filter((c) => c.id !== id);
+          const currentCanvasId = s.currentCanvasId === id ? canvases[0].id : s.currentCanvasId;
+          const positions = { ...s.positions };
+          for (const k of Object.keys(positions)) if (doomed.has(k)) delete positions[k];
+          set({ canvases, currentCanvasId, positions, selectedId: null, selectedIds: [] });
+        },
+
+        setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
+
+        setPosition: (id, pos) => set((s) => ({ positions: { ...s.positions, [id]: pos } })),
+
+        resetLayout: () =>
+          set((s) => {
+            const keep = { ...s.positions };
+            for (const t of s.tasks) if (t.canvasId === s.currentCanvasId) delete keep[t.id];
+            return { positions: keep };
+          }),
+
         select: (id) => {
           const s = get();
           const next = id ? [id] : [];
@@ -260,9 +359,11 @@ export const useTaskStore = create<State>()(
         setPanelOpen: (v) => set({ panelOpen: v }),
 
         addTask: (init, meta) => {
+          const st = get();
           const id = init.id ?? uid();
           const parentId = init.parentId ?? null;
-          const tasks = get().tasks;
+          const tasks = st.tasks;
+          const settings = st.settings;
           const siblings = tasks.filter((t) => t.parentId === parentId);
           let start = init.startDate ?? today();
           if (!init.startDate && siblings.length) {
@@ -272,8 +373,8 @@ export const useTaskStore = create<State>()(
             const p = tasks.find((t) => t.id === parentId);
             if (p) start = maxDate(start, p.startDate);
           }
-          const dur = init.dueDate ? Math.max(1, diffDays(start, init.dueDate) + 1) : 5;
-          const kind: TaskKind = init.kind ?? 'task';
+          const dur = init.dueDate ? Math.max(1, diffDays(start, init.dueDate) + 1) : settings.defaultDuration;
+          const kind: TaskKind = init.kind ?? settings.defaultKind;
           const task: Task = {
             id,
             title: init.title ?? (kind === 'plan' ? '新计划' : '新任务'),
@@ -281,19 +382,22 @@ export const useTaskStore = create<State>()(
             dependsOn: init.dependsOn ?? [],
             startDate: start,
             dueDate: init.dueDate ?? addDays(start, dur - 1),
+            startTime: init.startTime ?? '',
+            endTime: init.endTime ?? '',
             progress: init.progress ?? 0,
             status: init.status ?? 'todo',
             owner: init.owner ?? '',
             note: init.note ?? '',
             statusLocked: false,
             kind,
-            showInCalendar: init.showInCalendar ?? DEFAULT_SHOW_IN_CALENDAR[kind],
+            showInCalendar: init.showInCalendar ?? (kind === 'plan' ? false : settings.defaultInCalendar),
+            canvasId: st.currentCanvasId,
           };
           commit([...tasks, task], meta, { selectedId: id });
           return id;
         },
 
-        addChild: (parentId, meta, kind = 'task') => get().addTask({ parentId, kind }, meta),
+        addChild: (parentId, meta, kind) => get().addTask({ parentId, kind: kind ?? get().settings.defaultKind }, meta),
 
         updateTask: (id, patch, meta) => {
           const tasks = get().tasks;
@@ -575,27 +679,46 @@ export const useTaskStore = create<State>()(
 
         // 载入示例 / 清空都会覆盖现有数据 —— 先整份送进回收站，误点了还能捞回来
         resetSample: () => {
-          const roots = get().tasks.filter((t) => !t.parentId).map((t) => t.id);
-          if (roots.length) trashBatch(roots, { source: 'system', action: '载入示例（旧数据入回收站）', detail: `${get().tasks.length} 项` }, '载入示例前的原有数据');
-          commit(sampleTasks(), { source: 'system', action: '载入示例', detail: '示例课题' }, {
-            selectedId: 'P',
-            selectedIds: ['P'],
-            collapsed: {},
-          });
+          const cid = get().currentCanvasId;
+          const roots = get().tasks.filter((t) => !t.parentId && t.canvasId === cid).map((t) => t.id);
+          if (roots.length) {
+            const count = get().tasks.filter((t) => t.canvasId === cid).length;
+            trashBatch(roots, { source: 'system', action: '载入示例（旧数据入回收站）', detail: `${count} 项` }, '载入示例前的原有数据');
+          }
+          commit(
+            sampleTasks().map((t) => ({ ...t, canvasId: cid })),
+            { source: 'system', action: '载入示例', detail: '示例课题' },
+            {
+              selectedId: 'P',
+              selectedIds: ['P'],
+              collapsed: {},
+            },
+          );
         },
         clearAll: () => {
-          const roots = get().tasks.filter((t) => !t.parentId).map((t) => t.id);
+          const cid = get().currentCanvasId;
+          const roots = get().tasks.filter((t) => !t.parentId && t.canvasId === cid).map((t) => t.id);
           if (!roots.length) return;
-          trashBatch(roots, { source: 'system', action: '清空全部', detail: `${get().tasks.length} 项已移入回收站` }, '清空全部');
+          const count = get().tasks.filter((t) => t.canvasId === cid).length;
+          trashBatch(roots, { source: 'system', action: '清空全部', detail: `${count} 项已移入回收站` }, '清空全部');
           set({ collapsed: {}, selectedId: null, selectedIds: [] });
         },
-        importTasks: (tasks) =>
-          commit(tasks, { source: 'system', action: '导入 JSON', detail: `${tasks.length} 项` }, {
+        importTasks: (input, canvasId) => {
+          const cid = canvasId ?? get().currentCanvasId;
+          const incoming = input.map((t) => ({ ...t, canvasId: cid }));
+          const existing = get().tasks.filter((t) => t.canvasId !== cid);
+          commit([...existing, ...incoming], { source: 'system', action: '导入 JSON', detail: `${incoming.length} 项（当前画布）` }, {
             selectedId: null,
             selectedIds: [],
-          }),
-        loadSync: (payload) =>
-          commit(payload.tasks, { source: 'system', action: '从同步文件载入', detail: `${payload.tasks.length} 项` }, {
+          });
+        },
+        loadSync: (payload) => {
+          const m = migratePayload(payload);
+          commit(m.tasks, { source: 'system', action: '从同步文件载入', detail: `${m.tasks.length} 项` }, {
+            canvases: m.canvases,
+            currentCanvasId: m.currentCanvasId,
+            settings: m.settings,
+            positions: m.positions,
             collapsed: payload.collapsed ?? {},
             view: payload.view ?? 'all',
             dayWidth: payload.dayWidth ?? 22,
@@ -604,7 +727,8 @@ export const useTaskStore = create<State>()(
             trash: payload.trash ?? [],
             selectedId: null,
             selectedIds: [],
-          }),
+          });
+        },
       };
     },
     {
@@ -618,10 +742,24 @@ export const useTaskStore = create<State>()(
         hideDone: s.hideDone,
         panelOpen: s.panelOpen,
         trash: s.trash,
+        canvases: s.canvases,
+        currentCanvasId: s.currentCanvasId,
+        settings: s.settings,
+        positions: s.positions,
       }),
       onRehydrateStorage: () => (state) => {
-        if (state?.tasks?.length) state.tasks = normalize(state.tasks);
+        if (state?.tasks?.length) {
+          // 旧存档没有 canvasId → 全部归入默认画布，保证升级不丢数据
+          state.tasks = normalize(withCanvas(state.tasks, DEFAULT_CANVAS_ID));
+        }
       },
     },
   ),
 );
+
+/** 只返回「当前画布」的任务（多画布隔离），供各视图消费 */
+export function useCanvasTasks(): Task[] {
+  const tasks = useTaskStore((s) => s.tasks);
+  const cid = useTaskStore((s) => s.currentCanvasId);
+  return useMemo(() => tasks.filter((t) => t.canvasId === cid), [tasks, cid]);
+}

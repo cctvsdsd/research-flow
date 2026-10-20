@@ -1,4 +1,4 @@
-import { DEFAULT_SHOW_IN_CALENDAR, Task, TaskKind } from '../types';
+import { DEFAULT_CANVAS_ID, DEFAULT_SHOW_IN_CALENDAR, Task, TaskKind } from '../types';
 import { addDays, today } from './date';
 
 const d = (offset: number) => addDays(today(), offset);
@@ -24,6 +24,8 @@ export function sampleTasks(): Task[] {
     dependsOn,
     startDate,
     dueDate,
+    startTime: '',
+    endTime: '',
     progress,
     status: 'todo',
     owner: '',
@@ -31,6 +33,7 @@ export function sampleTasks(): Task[] {
     statusLocked: false,
     kind,
     showInCalendar: DEFAULT_SHOW_IN_CALENDAR[kind],
+    canvasId: DEFAULT_CANVAS_ID,
   });
 
   return [
@@ -64,6 +67,9 @@ export function blankTasks(): Task[] {
       statusLocked: false,
       kind: 'task',
       showInCalendar: true,
+      startTime: '',
+      endTime: '',
+      canvasId: DEFAULT_CANVAS_ID,
     },
   ];
 }

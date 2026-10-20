@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Background,
   BackgroundVariant,
@@ -19,7 +19,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Derived, STATUS_COLOR, Task, ViewId } from '../types';
-import { useTaskStore } from '../store/useTaskStore';
+import { useCanvasTasks, useTaskStore } from '../store/useTaskStore';
 import { NODE_H, NODE_W, treeLayout } from '../lib/layout';
 import { formatCN } from '../lib/date';
 import ContextMenu, { MenuEntry } from './ContextMenu';
@@ -40,10 +40,12 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
   const { task, derived } = data;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(task.title);
+  const [dateOpen, setDateOpen] = useState(false);
   const addChild = useTaskStore((s) => s.addChild);
   const removeTask = useTaskStore((s) => s.removeTask);
   const toggleCollapse = useTaskStore((s) => s.toggleCollapse);
   const updateTask = useTaskStore((s) => s.updateTask);
+  const setDates = useTaskStore((s) => s.setDates);
   const select = useTaskStore((s) => s.select);
   const color = STATUS_COLOR[derived.status];
 
@@ -71,6 +73,9 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
       <div className="node-actions">
         <button title="新增子任务" onClick={(e) => { e.stopPropagation(); addChild(id, { source: 'mind', action: '思维导图新增子任务', detail: `挂在「${task.title}」下` }); }}>
           +
+        </button>
+        <button title="新增子计划（默认不进日历）" className="subplan" onClick={(e) => { e.stopPropagation(); addChild(id, { source: 'mind', action: '思维导图新增子计划', detail: `挂在「${task.title}」下` }, 'plan'); }}>
+          ⊕
         </button>
         <button title="删除节点（含子任务）" onClick={(e) => { e.stopPropagation(); removeTask(id, { source: 'mind', action: '删除节点', detail: task.title }); }}>
           ×
@@ -101,12 +106,41 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
           <i className="dot" style={{ background: color }} />
           {task.progress}%
         </span>
-        <span>{formatCN(task.startDate)}–{formatCN(task.dueDate)}</span>
+        <span
+          className="node-date"
+          title="点击直接修改起止日期 / 时间"
+          onClick={(e) => { e.stopPropagation(); setDateOpen((v) => !v); }}
+        >
+          {formatCN(task.startDate)}–{formatCN(task.dueDate)}
+          {(task.startTime || task.endTime) && <em className="node-time"> {task.startTime || '…'}–{task.endTime || '…'}</em>}
+        </span>
         {task.owner && <span>· {task.owner}</span>}
       </div>
       <div className="node-bar">
         <i style={{ width: `${task.progress}%`, background: color }} />
       </div>
+
+      {dateOpen && (
+        <div className="nodrag node-date-editor" onClick={(e) => e.stopPropagation()}>
+          <label>
+            开始
+            <input type="date" value={task.startDate} onChange={(e) => e.target.value && setDates(id, e.target.value, task.dueDate, { source: 'mind', action: '修改开始日', detail: `${task.title} → ${e.target.value}` })} />
+          </label>
+          <label>
+            截止
+            <input type="date" value={task.dueDate} onChange={(e) => e.target.value && setDates(id, task.startDate, e.target.value, { source: 'mind', action: '修改截止日', detail: `${task.title} → ${e.target.value}` })} />
+          </label>
+          <label>
+            起
+            <input type="time" value={task.startTime ?? ''} onChange={(e) => updateTask(id, { startTime: e.target.value }, { source: 'mind', action: '修改开始时间', detail: task.title })} />
+          </label>
+          <label>
+            止
+            <input type="time" value={task.endTime ?? ''} onChange={(e) => updateTask(id, { endTime: e.target.value }, { source: 'mind', action: '修改结束时间', detail: task.title })} />
+          </label>
+          <button className="node-date-done" onClick={() => setDateOpen(false)}>完成</button>
+        </div>
+      )}
 
       {data.hiddenCount > 0 && (
         <button
@@ -154,7 +188,9 @@ function nearestVisible(id: string, tasks: Task[], vis: Set<string>): string | n
 }
 
 function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; compact?: boolean }) {
-  const tasks = useTaskStore((s) => s.tasks);
+  const tasks = useCanvasTasks();
+  const positions = useTaskStore((s) => s.positions);
+  const setPosition = useTaskStore((s) => s.setPosition);
   const collapsed = useTaskStore((s) => s.collapsed);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const setSelection = useTaskStore((s) => s.setSelection);
@@ -186,7 +222,6 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
-  const manualPos = useRef(new Map<string, { x: number; y: number }>());
   const nodesRef = useRef<TaskFlowNode[]>([]);
   nodesRef.current = nodes;
   /**
@@ -236,17 +271,7 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const structKey = useMemo(
-    () => tasks.map((t) => `${t.id}>${t.parentId ?? ''}`).join('|') + '#' + Object.keys(collapsed).filter((k) => collapsed[k]).join(','),
-    [tasks, collapsed],
-  );
-  const prevStruct = useRef('');
-
   useEffect(() => {
-    if (prevStruct.current !== structKey) {
-      manualPos.current.clear();
-      prevStruct.current = structKey;
-    }
     const layout = treeLayout(tasks, collapsed);
     const vis = visibleIds(tasks, collapsed);
     const selSet = new Set(selectedIds);
@@ -255,7 +280,8 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
       .map((t) => ({
         id: t.id,
         type: 'task' as const,
-        position: manualPos.current.get(t.id) ?? layout.get(t.id) ?? { x: 0, y: 0 },
+        // 手动摆放过的位置优先；没有则使用自动布局（新节点），且不会因改日期/改结构而跳回
+        position: positions[t.id] ?? layout.get(t.id) ?? { x: 0, y: 0 },
         selected: selSet.has(t.id),
         data: {
           task: t,
@@ -309,7 +335,7 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
       }
     }
     setEdges(nextEdges);
-  }, [tasks, collapsed, selectedIds, derived, structKey, renamingId, setNodes, setEdges]);
+  }, [tasks, collapsed, selectedIds, derived, renamingId, positions, setNodes, setEdges]);
 
   useEffect(() => {
     const t = setTimeout(() => fitView({ padding: 0.18, duration: 250 }), 80);
@@ -319,7 +345,8 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
 
   const onNodeDragStop: OnNodeDrag<TaskFlowNode> = useCallback(
     (_e, node) => {
-      manualPos.current.set(node.id, node.position);
+      // 落点立即持久化，拖到哪就停哪，不被自动布局覆盖
+      setPosition(node.id, node.position);
       const cx = node.position.x + NODE_W / 2;
       const cy = node.position.y + NODE_H / 2;
       let best: { id: string; d: number } | null = null;
@@ -341,7 +368,7 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
         }
       }
     },
-    [tasks, setParent],
+    [tasks, setParent, setPosition],
   );
 
   const onConnect = useCallback(
@@ -416,6 +443,7 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
     return [
       { kind: 'title', label: t.title },
       { kind: 'item', label: '新增子任务', hint: '挂在此节点下', onClick: () => addChild(id, { source: 'mind', action: '新增子任务', detail: t.title }) },
+      { kind: 'item', label: '新增子计划', hint: '默认不进日历', onClick: () => addChild(id, { source: 'mind', action: '新增子计划', detail: t.title }, 'plan') },
       { kind: 'item', label: '重命名', hint: '双击标题也可', onClick: () => { select(id); setRenamingId(id); } },
       { kind: 'sep' },
       { kind: 'item', label: done ? '取消完成' : '标记完成', hint: done ? '进度归零' : '进度 100%', onClick: () => bulkProgress([id], done ? 0 : 100, { source: 'mind', action: done ? '取消完成' : '标记完成', detail: t.title }) },
@@ -509,10 +537,16 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
             removeDependency(to, from, { source: 'mind', action: '移除依赖', detail: `${titleOf(from)} ⇢ ${titleOf(to)}` });
           })
         }
-        onPaneClick={() => { setMenu(null); select(null); }}
+        onPaneClick={() => {
+          setMenu(null);
+          // 设置项：框选后点击空白处是否取消选择。关闭时保留框选。
+          if (useTaskStore.getState().settings.clearSelOnOutsideClick) select(null);
+        }}
         onSelectionChange={({ nodes: ns }) => {
           const ids = ns.map((n) => n.id);
-          if (ids.length) setSelection(ids); // 清空交给 onPaneClick，避免初始化竞态
+          if (ids.length) setSelection(ids); // 框选/点选 → 同步
+          // 空白点击清空节点选择时，遵循「点击空白处取消选择」开关
+          else if (useTaskStore.getState().settings.clearSelOnOutsideClick) setSelection([]);
         }}
         onSelectionDragStop={(_e, ns) => setSelection(ns.map((n) => n.id))}
         selectionOnDrag

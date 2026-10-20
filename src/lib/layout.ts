@@ -22,7 +22,7 @@ export function treeLayout(tasks: Task[], collapsed: Record<string, boolean>): M
   let cursor = 0;
 
   const place = (id: string, depth: number): number => {
-    const list = (kids.get(id) ?? []).slice().sort((a, b) => a.startDate.localeCompare(b.startDate));
+    const list = kids.get(id) ?? [];
     const x = depth * (NODE_W + GAP_X);
     if (!list.length || collapsed[id]) {
       const y = cursor * (NODE_H + GAP_Y);
@@ -36,12 +36,9 @@ export function treeLayout(tasks: Task[], collapsed: Record<string, boolean>): M
     return y;
   };
 
-  roots
-    .slice()
-    .sort((a, b) => a.startDate.localeCompare(b.startDate))
-    .forEach((r) => {
-      place(r.id, 0);
-      cursor += 0.5; // 根之间留一点空隙
-    });
+  roots.forEach((r) => {
+    place(r.id, 0);
+    cursor += 0.5; // 根之间留一点空隙
+  });
   return pos;
 }

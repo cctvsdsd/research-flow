@@ -16,6 +16,9 @@ export interface Task {
   /** YYYY-MM-DD */
   startDate: string;
   dueDate: string;
+  /** 起止具体时间 HH:MM，可选；为空字符串表示不设置（默认项） */
+  startTime?: string;
+  endTime?: string;
   progress: number; // 0-100
   status: Status; // 存储值；实际展示以派生状态为准（除非 statusLocked）
   owner: string;
@@ -26,6 +29,8 @@ export interface Task {
   kind: TaskKind;
   /** 是否在日历中显示 —— 与完成状态无关，纯用户控制 */
   showInCalendar: boolean;
+  /** 所属画布 id（多画布隔离用） */
+  canvasId: string;
 }
 
 /** 回收站条目：整棵子树连同结构信息一起暂存，保证能原样还原 */
@@ -103,3 +108,33 @@ export const DEFAULT_SHOW_IN_CALENDAR: Record<TaskKind, boolean> = {
   plan: false,
   task: true,
 };
+
+/** 画布：一块独立思维导图 + 配套的三视图数据，互不干扰 */
+export interface Canvas {
+  id: string;
+  name: string;
+}
+
+/** 全局默认参数，可在设置面板调整 */
+export interface Settings {
+  /** 新增子节点时默认类型 */
+  defaultKind: TaskKind;
+  /** 新增子任务默认是否进日历（计划类型即便勾选也按 kind 默认不进） */
+  defaultInCalendar: boolean;
+  /** 默认工期（天） */
+  defaultDuration: number;
+  /** 详情面板里"起止时间"是否默认展开 */
+  timesExpanded: boolean;
+  /** 框选后，点击非选中目标（空白/其他节点）是否取消框选 */
+  clearSelOnOutsideClick: boolean;
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  defaultKind: 'task',
+  defaultInCalendar: true,
+  defaultDuration: 5,
+  timesExpanded: false,
+  clearSelOnOutsideClick: true,
+};
+
+export const DEFAULT_CANVAS_ID = 'default';

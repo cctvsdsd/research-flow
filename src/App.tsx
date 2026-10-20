@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { useTaskStore } from './store/useTaskStore';
+import { useTaskStore, useCanvasTasks } from './store/useTaskStore';
 import { computeDerived } from './lib/schedule';
 import TopBar from './components/TopBar';
 import MindMapView from './components/MindMapView';
@@ -11,7 +11,7 @@ import TaskPanel from './components/TaskPanel';
 import StatusBar from './components/StatusBar';
 
 export default function App() {
-  const tasks = useTaskStore((s) => s.tasks);
+  const tasks = useCanvasTasks();
   const view = useTaskStore((s) => s.view);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const selectedId = useTaskStore((s) => s.selectedId);

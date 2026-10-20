@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Derived, STATUS_COLOR, STATUS_LABEL } from '../types';
 import { useTaskStore } from '../store/useTaskStore';
+import { useCanvasTasks } from '../store/useTaskStore';
 import { flattenTree } from '../lib/schedule';
 import { formatCN } from '../lib/date';
 import ContextMenu, { MenuEntry } from './ContextMenu';
@@ -14,7 +15,7 @@ const STATUS_BAR: Record<string, string> = {
 };
 
 export default function HierarchyView({ derived, compact }: { derived: Record<string, Derived>; compact?: boolean }) {
-  const tasks = useTaskStore((s) => s.tasks);
+  const tasks = useCanvasTasks();
   const collapsed = useTaskStore((s) => s.collapsed);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const setSelection = useTaskStore((s) => s.setSelection);

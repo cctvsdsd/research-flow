@@ -430,3 +430,79 @@ button.sync-on { border-color: rgba(34,197,94,0.5); color: #86efac; position: re
   border: 1px solid var(--border-soft); color: var(--muted);
 }
 
+/* ---------- Canvas switcher (top bar) ---------- */
+.canvas-switch {
+  display: flex; align-items: center; gap: 2px;
+  background: #101728; border: 1px solid var(--border); border-radius: 8px; padding: 2px 3px;
+}
+.canvas-switch select { background: transparent; border: none; width: auto; padding: 4px 6px; color: var(--text); }
+.canvas-switch select:focus { border: none; box-shadow: none; }
+.canvas-switch .add {
+  background: transparent; border: none; color: var(--muted); padding: 3px 8px; font-size: 15px; line-height: 1; border-radius: 6px;
+}
+.canvas-switch .add:hover { color: var(--text); background: var(--panel-2); }
+
+/* ---------- Settings button ---------- */
+button.gear { background: transparent; border: 1px solid var(--border); }
+button.gear:hover { background: var(--panel-2); border-color: var(--accent); }
+
+/* ---------- Mind node: sub-plan + inline date editor ---------- */
+.node-actions button.subplan { color: #a78bfa; border-color: rgba(139,124,246,0.5); }
+.node-date {
+  cursor: pointer; text-decoration: underline dotted rgba(142,163,196,0.55); text-underline-offset: 2px;
+}
+.node-date:hover { color: var(--text); }
+.node-time { font-style: normal; color: #a78bfa; opacity: 0.9; }
+.node-date-editor {
+  position: absolute; top: 100%; left: 0; z-index: 30; margin-top: 6px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 250px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.55);
+}
+.node-date-editor label { font-size: 10px; margin: 0; display: flex; flex-direction: column; gap: 3px; color: var(--muted); }
+.node-date-editor input { font-size: 11px; padding: 3px 5px; width: 100%; }
+.node-date-done { grid-column: 1 / -1; margin-top: 2px; }
+
+/* ---------- Task detail: time toggle ---------- */
+.time-toggle-row { margin-top: 10px; }
+.time-toggle { width: 100%; text-align: left; background: var(--bg); border: 1px dashed var(--border); color: var(--muted); }
+.time-toggle:hover { color: var(--text); border-color: var(--accent); }
+.time-inputs { display: flex; gap: 10px; margin-top: 8px; }
+.time-inputs label { flex: 1; margin-top: 0; }
+.time-inputs input { width: 100%; }
+
+/* ---------- Modal (settings) ---------- */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(8,12,20,0.6); z-index: 500;
+  display: flex; align-items: center; justify-content: center; backdrop-filter: blur(3px);
+}
+.modal {
+  width: 470px; max-width: 94vw; max-height: 86vh; background: var(--bg-soft);
+  border: 1px solid var(--border); border-radius: 14px; display: flex; flex-direction: column;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.55); overflow: hidden;
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.modal-head h3 { margin: 0; font-size: 14px; }
+.modal-tabs { display: flex; gap: 4px; padding: 10px 16px 0; }
+.modal-tabs button { border: none; background: transparent; color: var(--muted); padding: 6px 12px; border-radius: 7px 7px 0 0; }
+.modal-tabs button.active { background: var(--accent-soft); color: #cfe0ff; }
+.modal-body { padding: 14px 16px 18px; overflow-y: auto; }
+.modal-body label { margin-top: 12px; }
+.modal-body label.chk { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text); margin-top: 12px; }
+.modal-body label.chk input { width: auto; flex: 0 0 auto; accent-color: var(--accent); }
+.modal-note {
+  font-size: 11.5px; color: var(--muted); line-height: 1.6; background: var(--panel);
+  border: 1px solid var(--border-soft); border-radius: 8px; padding: 8px 10px; margin-top: 14px;
+}
+.canvas-list { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.canvas-row {
+  display: flex; align-items: center; gap: 8px; background: var(--panel);
+  border: 1px solid var(--border-soft); border-radius: 9px; padding: 6px 8px;
+}
+.canvas-row.current { border-color: var(--accent); }
+.canvas-pick { border: none; background: transparent; text-align: left; flex: 0 0 auto; width: 116px; color: var(--text); padding: 4px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.canvas-rename { flex: 1; min-width: 0; }
+.canvas-del { font-size: 11px; padding: 4px 8px; flex: 0 0 auto; }
+.canvas-add { display: flex; gap: 8px; margin-top: 10px; }
+.canvas-add input { flex: 1; }
+

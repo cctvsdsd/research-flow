@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { ViewId } from '../types';
-import { useTaskStore } from '../store/useTaskStore';
+import { useTaskStore, useCanvasTasks } from '../store/useTaskStore';
 import { initCloudSync, onCloudStatus, cloudSyncNow, CloudStatus } from '../lib/cloud-sync';
 import TrashDrawer from './TrashDrawer';
+import SettingsModal from './SettingsModal';
 
 const TABS: { id: ViewId; label: string }[] = [
   { id: 'all', label: '总览' },
@@ -24,10 +25,15 @@ export default function TopBar() {
   const canUndo = useTaskStore((s) => s.past.length > 0);
   const canRedo = useTaskStore((s) => s.future.length > 0);
   const trashCount = useTaskStore((s) => s.trash.length);
-  const tasks = useTaskStore((s) => s.tasks);
+  const canvases = useTaskStore((s) => s.canvases);
+  const currentCanvasId = useTaskStore((s) => s.currentCanvasId);
+  const setCurrentCanvas = useTaskStore((s) => s.setCurrentCanvas);
+  const addCanvas = useTaskStore((s) => s.addCanvas);
+  const tasks = useCanvasTasks();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [trashOpen, setTrashOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [syncState, setSyncState] = useState<CloudStatus>('idle');
   const [syncHint, setSyncHint] = useState('');
 
@@ -88,9 +94,33 @@ export default function TopBar() {
 
         <div className="spacer" />
 
+        <div className="canvas-switch" title="切换画布（多工作区）">
+          <select value={currentCanvasId} onChange={(e) => setCurrentCanvas(e.target.value)}>
+            {canvases.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <button
+            className="add"
+            title="新建画布"
+            onClick={() => {
+              const name = prompt('新画布名称：', `画布 ${canvases.length + 1}`);
+              if (name && name.trim()) addCanvas(name.trim());
+            }}
+          >
+            ＋
+          </button>
+        </div>
+
         <div className="toolgroup">
-          <button className="ghost" onClick={undo} disabled={!canUndo} title="撤销 (Ctrl/⌘+Z)">↶ 撤销</button>
-          <button className="ghost" onClick={redo} disabled={!canRedo} title="重做 (Ctrl/⌘+Shift+Z)">↷ 重做</button>
+          <button className="ghost" onClick={undo} disabled={!canUndo} title="撤销 (Ctrl/⌘+Z)">
+            ↶ 撤销
+          </button>
+          <button className="ghost" onClick={redo} disabled={!canRedo} title="重做 (Ctrl/⌘+Shift+Z)">
+            ↷ 重做
+          </button>
           <button className="ghost" onClick={() => setTrashOpen(true)} title="回收站（软删除的任务可还原）">
             回收站{trashCount > 0 ? ` (${trashCount})` : ''}
           </button>
@@ -110,11 +140,14 @@ export default function TopBar() {
               e.target.value = '';
             }}
           />
-          <button className="ghost" onClick={() => confirm('载入示例课题会覆盖当前数据，继续？') && resetSample()}>
+          <button className="ghost" onClick={() => confirm('载入示例课题会覆盖当前画布数据，继续？') && resetSample()}>
             载入示例
           </button>
-          <button className="ghost" onClick={() => confirm('确认清空全部任务？（已删除的项会进入回收站）') && clearAll()}>
+          <button className="ghost" onClick={() => confirm('确认清空当前画布全部任务？（已删除的项会进入回收站）') && clearAll()}>
             清空
+          </button>
+          <button className="gear" onClick={() => setSettingsOpen(true)} title="默认参数 / 画布管理">
+            ⚙ 设置
           </button>
 
           <div className="sync-box">
@@ -127,11 +160,16 @@ export default function TopBar() {
             </button>
           </div>
         </div>
-
-        {trashOpen && <TrashDrawer onClose={() => setTrashOpen(false)} />}
       </header>
+      {trashOpen && <TrashDrawer onClose={() => setTrashOpen(false)} />}
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {syncHint && (
-        <div className="sync-hint">{syncHint}<button className="link" onClick={() => setSyncHint('')}>×</button></div>
+        <div className="sync-hint">
+          {syncHint}
+          <button className="link" onClick={() => setSyncHint('')}>
+            ×
+          </button>
+        </div>
       )}
     </>
   );

@@ -1,13 +1,13 @@
 import { useMemo, useRef, useState } from 'react';
 import { Derived, STATUS_COLOR } from '../types';
-import { useTaskStore } from '../store/useTaskStore';
+import { useTaskStore, useCanvasTasks } from '../store/useTaskStore';
 import { addDays, diffDays, formatCN, isWeekend, startOfMonth, startOfWeek, today, weekdayCN } from '../lib/date';
 import { durationOf } from '../lib/schedule';
 
 const WEEK_HEAD = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
 export default function CalendarView({ derived, compact }: { derived: Record<string, Derived>; compact?: boolean }) {
-  const tasks = useTaskStore((s) => s.tasks);
+  const tasks = useCanvasTasks();
   const selectedId = useTaskStore((s) => s.selectedId);
   const hideDone = useTaskStore((s) => s.hideDone);
   const select = useTaskStore((s) => s.select);
