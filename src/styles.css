@@ -506,3 +506,83 @@ button.gear:hover { background: var(--panel-2); border-color: var(--accent); }
 .canvas-add { display: flex; gap: 8px; margin-top: 10px; }
 .canvas-add input { flex: 1; }
 
+/* ---------- Node connect button + menu (MindMap) ---------- */
+.linkbtn {
+  border: 1px solid var(--border); background: var(--panel); color: var(--accent);
+  width: 20px; height: 20px; padding: 0; border-radius: 999px; font-size: 13px; line-height: 1;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+.linkbtn:hover { background: var(--accent); color: #fff; }
+
+.node-connect-menu {
+  position: absolute; top: 6px; right: 26px; z-index: 8;
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.18); padding: 6px; width: 196px;
+}
+.node-connect-menu .m-title { font-size: 11px; color: var(--muted); padding: 2px 4px 6px; }
+.node-connect-menu .m-opt {
+  display: block; width: 100%; text-align: left; border: none; background: transparent;
+  padding: 6px 8px; border-radius: 7px; font-size: 12.5px; color: var(--text); cursor: pointer;
+}
+.node-connect-menu .m-opt:hover { background: var(--panel); }
+.node-connect-menu select {
+  width: 100%; margin-top: 6px; font-size: 12px; padding: 4px 6px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--text);
+}
+.node-auto-pct {
+  font-size: 9.5px; padding: 1px 6px; border-radius: 999px;
+  background: rgba(96,165,250,0.16); color: #60a5fa; border: 1px solid rgba(96,165,250,0.4);
+  margin-left: 6px; flex-shrink: 0;
+}
+
+/* ---------- Gantt date cells + box selection + selbar ---------- */
+.gantt-date-cell {
+  font-size: 11px; color: var(--muted); padding: 1px 5px; border-radius: 5px;
+  border: 1px solid transparent; cursor: text; white-space: nowrap;
+}
+.gantt-date-cell:hover { background: var(--panel); border-color: var(--border); color: var(--text); }
+.gantt-date-input {
+  font-size: 11px; padding: 1px 3px; border: 1px solid var(--accent); border-radius: 5px;
+  background: var(--bg-soft); color: var(--text);
+}
+.gantt-row.rowsel { background: rgba(37,99,235,0.12); }
+.gantt-box {
+  position: fixed; z-index: 999; border: 1px solid #2563eb; background: rgba(37,99,235,0.12);
+  pointer-events: none; border-radius: 2px;
+}
+.gantt-selbar {
+  position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 6;
+  display: flex; align-items: center; gap: 6px;
+  background: #0f172a; color: #f9fafb; border: 1px solid #1e293b; border-radius: 10px; padding: 6px 10px; font-size: 12px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+}
+.gantt-selbar b { color: #60a5fa; }
+.gantt-selbar button { font-size: 11.5px; padding: 4px 8px; background: #1e293b; border: 1px solid #334155; color: #f9fafb; }
+.gantt-selbar button:hover { background: #334155; }
+.gantt-selbar .danger { color: #fca5a5; border-color: rgba(239,68,68,0.5); }
+
+/* ---------- Hierarchy date cells ---------- */
+.hier-date-cell {
+  font-size: 11.5px; color: #6b7280; min-width: 130px; text-align: right; flex-shrink: 0;
+  padding: 2px 6px; border-radius: 6px; border: 1px solid transparent; cursor: text;
+}
+.hier-date-cell:hover { background: #f3f4f6; border-color: #e5e7eb; color: #0f172a; }
+.hier-date-input {
+  font-size: 11.5px; padding: 2px 4px; border: 1px solid #2563eb; border-radius: 6px;
+  background: #fff; color: #0f172a;
+}
+
+/* ---------- Task panel: header row + collapse ---------- */
+.panel-head-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 6px 0 10px;
+}
+.panel-head-row h3 { margin: 0; }
+.panel-collapsed { width: 44px; flex: 0 0 44px; padding: 10px 6px; }
+.panel-collapsed .panel-collapsed-only { writing-mode: vertical-rl; text-orientation: mixed; font-size: 12px; }
+.panel-hint {
+  font-size: 11.5px; line-height: 1.55; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--border-soft); border-radius: 8px; padding: 7px 9px; margin: 8px 0;
+}
+select.mini { font-size: 11.5px; padding: 2px 5px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel); color: var(--text); }
+

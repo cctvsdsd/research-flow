@@ -21,6 +21,7 @@ import '@xyflow/react/dist/style.css';
 import { Derived, STATUS_COLOR, Task, ViewId } from '../types';
 import { useCanvasTasks, useTaskStore } from '../store/useTaskStore';
 import { NODE_H, NODE_W, treeLayout } from '../lib/layout';
+import { descendantsOf } from '../lib/schedule';
 import { formatCN } from '../lib/date';
 import ContextMenu, { MenuEntry } from './ContextMenu';
 
@@ -41,12 +42,16 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(task.title);
   const [dateOpen, setDateOpen] = useState(false);
+  /** 连接菜单：null 关闭；'new' 直接创建；'link' 选已有节点 */
+  const [connect, setConnect] = useState<null | 'new' | 'link'>(null);
+  const [linkTarget, setLinkTarget] = useState('');
   const addChild = useTaskStore((s) => s.addChild);
   const removeTask = useTaskStore((s) => s.removeTask);
   const toggleCollapse = useTaskStore((s) => s.toggleCollapse);
   const updateTask = useTaskStore((s) => s.updateTask);
   const setDates = useTaskStore((s) => s.setDates);
   const select = useTaskStore((s) => s.select);
+  const addDependency = useTaskStore((s) => s.addDependency);
   const color = STATUS_COLOR[derived.status];
 
   useEffect(() => setDraft(task.title), [task.title]);
@@ -59,6 +64,34 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
     data.onRenameDone?.();
     const v = draft.trim();
     if (v && v !== task.title) updateTask(id, { title: v }, { source: 'mind', action: '重命名节点', detail: v });
+  };
+
+  /** 连接菜单里的候选节点：排除自己与自己的整棵子树，避免成环 */
+  const linkCandidates = useTaskStore((s) => {
+    const self = s.tasks.find((t) => t.id === id);
+    if (!self) return [] as Task[];
+    const banned = new Set<string>([id, ...descendantsOf(s.tasks, id)]);
+    return s.tasks.filter((t) => t.canvasId === self.canvasId && !banned.has(t.id));
+  });
+
+  /** 在此节点下创建一个新节点（用于"创建新节点"选项） */
+  const createAndLink = () => {
+    addChild(id, { source: 'mind', action: '创建子节点', detail: `挂在「${task.title}」下` });
+    setConnect(null);
+  };
+
+  /** 把当前节点链接到已有节点：建立依赖（已有节点 → 当前节点） */
+  const linkTo = (targetId: string) => {
+    if (!targetId) return;
+    const target = linkCandidates.find((t) => t.id === targetId);
+    const ok = addDependency(id, targetId, {
+      source: 'mind',
+      action: '链接节点',
+      detail: target ? `「${target.title}」完成后才能开始「${task.title}」` : targetId,
+    });
+    setConnect(null);
+    setLinkTarget('');
+    if (!ok) alert('该链接会形成循环，已忽略');
   };
 
   return (
@@ -77,10 +110,43 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
         <button title="新增子计划（默认不进日历）" className="subplan" onClick={(e) => { e.stopPropagation(); addChild(id, { source: 'mind', action: '思维导图新增子计划', detail: `挂在「${task.title}」下` }, 'plan'); }}>
           ⊕
         </button>
+        <button title="连接：创建新节点 或 链接已有节点" className="linkbtn" onClick={(e) => { e.stopPropagation(); setConnect((v) => (v ? null : 'new')); }}>
+          ⇢
+        </button>
         <button title="删除节点（含子任务）" onClick={(e) => { e.stopPropagation(); removeTask(id, { source: 'mind', action: '删除节点', detail: task.title }); }}>
           ×
         </button>
       </div>
+
+      {connect && (
+        <div className="nodrag node-connect-menu" onClick={(e) => e.stopPropagation()}>
+          <div className="node-connect-title">从此节点「{task.title}」</div>
+          {connect === 'new' ? (
+            <>
+              <button className="primary" onClick={createAndLink}>＋ 创建新节点（作为子任务）</button>
+              <button onClick={() => setConnect('link')}>⇢ 链接到已有节点…</button>
+              <button className="ghost" onClick={() => setConnect(null)}>取消</button>
+            </>
+          ) : (
+            <>
+              <select
+                value={linkTarget}
+                onChange={(e) => setLinkTarget(e.target.value)}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <option value="">选择要链接的节点…</option>
+                {linkCandidates.map((t) => (
+                  <option key={t.id} value={t.id}>{t.title}</option>
+                ))}
+              </select>
+              <div className="node-connect-row">
+                <button className="primary" disabled={!linkTarget} onClick={() => linkTo(linkTarget)}>建立链接</button>
+                <button className="ghost" onClick={() => { setConnect('new'); setLinkTarget(''); }}>‹ 返回</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {editing ? (
         <input
@@ -106,6 +172,9 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
           <i className="dot" style={{ background: color }} />
           {task.progress}%
         </span>
+        {(task.progressMode ?? 'auto') === 'auto' && derived.hasChildren && (
+          <span className="node-auto-pct" title="进度由子任务自动汇总，不可拖动">自动</span>
+        )}
         <span
           className="node-date"
           title="点击直接修改起止日期 / 时间"
@@ -190,7 +259,8 @@ function nearestVisible(id: string, tasks: Task[], vis: Set<string>): string | n
 function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; compact?: boolean }) {
   const tasks = useCanvasTasks();
   const positions = useTaskStore((s) => s.positions);
-  const setPosition = useTaskStore((s) => s.setPosition);
+  const setPositions = useTaskStore((s) => s.setPositions);
+  const lockPositions = useTaskStore((s) => s.settings.lockPositions);
   const collapsed = useTaskStore((s) => s.collapsed);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const setSelection = useTaskStore((s) => s.setSelection);
@@ -206,6 +276,9 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
   const bulkShift = useTaskStore((s) => s.bulkShift);
   const bulkStatus = useTaskStore((s) => s.bulkStatus);
   const bulkRemove = useTaskStore((s) => s.bulkRemove);
+  const bulkCollapse = useTaskStore((s) => s.bulkCollapse);
+  const collapseAll = useTaskStore((s) => s.collapseAll);
+  const expandAll = useTaskStore((s) => s.expandAll);
   const chainDependencies = useTaskStore((s) => s.chainDependencies);
   const resetSample = useTaskStore((s) => s.resetSample);
   const setKind = useTaskStore((s) => s.setKind);
@@ -275,13 +348,36 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
     const layout = treeLayout(tasks, collapsed);
     const vis = visibleIds(tasks, collapsed);
     const selSet = new Set(selectedIds);
+
+    /**
+     * 锁定排版的关键：
+     * 自动布局只用于「从未被摆放过的新节点」。已有位置的一律沿用，
+     * 因此新增/删除/改层级都不会让其他节点跳位。
+     * 首次见到某节点时把布局结果固化进 positions，之后它就再也不会被重排。
+     */
+    const fresh: Record<string, { x: number; y: number }> = {};
+    if (lockPositions) {
+      let changed = false;
+      for (const t of tasks) {
+        if (positions[t.id]) continue;
+        const p = layout.get(t.id);
+        if (!p) continue;
+        fresh[t.id] = p;
+        changed = true;
+      }
+      if (changed) {
+        // 直接写 store（不走撤销栈）：这只是"记录初始位置"，不是用户操作
+        useTaskStore.setState((s) => ({ positions: { ...s.positions, ...fresh } }));
+      }
+    }
+
     const next: TaskFlowNode[] = tasks
       .filter((t) => vis.has(t.id))
       .map((t) => ({
         id: t.id,
         type: 'task' as const,
         // 手动摆放过的位置优先；没有则使用自动布局（新节点），且不会因改日期/改结构而跳回
-        position: positions[t.id] ?? layout.get(t.id) ?? { x: 0, y: 0 },
+        position: positions[t.id] ?? fresh[t.id] ?? layout.get(t.id) ?? { x: 0, y: 0 },
         selected: selSet.has(t.id),
         data: {
           task: t,
@@ -346,7 +442,9 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
   const onNodeDragStop: OnNodeDrag<TaskFlowNode> = useCallback(
     (_e, node) => {
       // 落点立即持久化，拖到哪就停哪，不被自动布局覆盖
-      setPosition(node.id, node.position);
+      setPositions({ [node.id]: node.position }, { source: 'mind', action: '拖动节点位置', detail: titleOf(node.id) });
+      // 设置项：默认关闭 —— 拖动只是摆放位置，不代表要建立父子层级
+      if (!useTaskStore.getState().settings.dragToReparent) return;
       const cx = node.position.x + NODE_W / 2;
       const cy = node.position.y + NODE_H / 2;
       let best: { id: string; d: number } | null = null;
@@ -364,11 +462,10 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
         if (cur && cur.parentId !== best.id) {
           const target = tasks.find((t) => t.id === best.id);
           setParent(node.id, best.id, { source: 'mind', action: '拖拽调整层级', detail: `「${cur.title}」→ 挂在「${target?.title}」下` });
-          return;
         }
       }
     },
-    [tasks, setParent, setPosition],
+    [tasks, setParent, setPositions],
   );
 
   const onConnect = useCallback(
@@ -427,6 +524,14 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
       { kind: 'item', label: '全部加入日历', onClick: () => bulkCalendar(ids, true, { source: 'mind', action: '批量加日历', detail: `${n} 项` }) },
       { kind: 'item', label: '全部移出日历', onClick: () => bulkCalendar(ids, false, { source: 'mind', action: '批量移出日历', detail: `${n} 项` }) },
       { kind: 'sep' },
+      {
+        kind: 'item',
+        label: '折叠这些节点',
+        hint: '仅对含子任务的节点生效',
+        onClick: () => bulkCollapse(ids, true),
+      },
+      { kind: 'item', label: '展开这些节点', onClick: () => bulkCollapse(ids, false) },
+      { kind: 'sep' },
       { kind: 'item', label: `删除这 ${n} 项（含子任务）`, danger: true, onClick: () => { if (confirm(`删除选中的 ${n} 个任务？三视图将同步移除。`)) bulkRemove(ids, { source: 'mind', action: '批量删除', detail: `${n} 项` }); } },
       { kind: 'item', label: '取消选择', onClick: () => setSelection([]) },
     ];
@@ -479,18 +584,9 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
       { kind: 'item', label: '适应画布', onClick: () => fitView({ padding: 0.18, duration: 300 }) },
       { kind: 'item', label: '撤销 (Ctrl/⌘+Z)', disabled: !canUndo, onClick: () => undo() },
       { kind: 'item', label: '重做 (Ctrl/⌘+Shift+Z)', disabled: !canRedo, onClick: () => redo() },
-      {
-        kind: 'item',
-        label: '展开 / 折叠全部',
-        disabled: !tasks.length,
-        onClick: () => {
-          const all = tasks.filter((t) => tasks.some((c) => c.parentId === t.id)).map((t) => t.id);
-          const next: Record<string, boolean> = {};
-          const anyOpen = all.some((id) => !collapsed[id]);
-          all.forEach((id) => (next[id] = anyOpen));
-          useTaskStore.setState({ collapsed: next });
-        },
-      },
+      { kind: 'sep' },
+      { kind: 'item', label: '全部折叠', hint: '收起所有子任务', disabled: !tasks.length, onClick: () => collapseAll() },
+      { kind: 'item', label: '全部展开', disabled: !tasks.length, onClick: () => expandAll() },
       { kind: 'sep' },
       { kind: 'title', label: '视图' },
       { kind: 'item', label: '切到总览（三视图同屏）', onClick: () => goto('all') },
@@ -581,16 +677,21 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
             + 子任务
           </button>
           <button onClick={() => setSelection([...visibleIds(tasks, collapsed)])}>全选</button>
+          <button onClick={collapseAll} title="折叠所有含子任务的节点">全部折叠</button>
+          <button onClick={expandAll} title="展开所有节点">全部展开</button>
           <button
-            onClick={() => {
-              const all = tasks.filter((t) => tasks.some((c) => c.parentId === t.id)).map((t) => t.id);
-              const next: Record<string, boolean> = {};
-              const anyOpen = all.some((id) => !collapsed[id]);
-              all.forEach((id) => (next[id] = anyOpen));
-              useTaskStore.setState({ collapsed: next });
-            }}
+            disabled={!selectedIds.length}
+            onClick={() => bulkCollapse(selectedIds, true)}
+            title="折叠框选中的节点（仅对含子任务的节点生效）"
           >
-            展开/折叠全部
+            折叠所选
+          </button>
+          <button
+            disabled={!selectedIds.length}
+            onClick={() => bulkCollapse(selectedIds, false)}
+            title="展开框选中的节点"
+          >
+            展开所选
           </button>
           <button onClick={() => fitView({ padding: 0.18, duration: 300 })}>适应画布</button>
         </div>
@@ -600,6 +701,8 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
         <div className="mind-selbar">
           已框选 <b>{selectedIds.length}</b> 项 · 右键单击可批量操作
           <button onClick={() => bulkProgress(selectedIds, 100, { source: 'mind', action: '批量完成', detail: `${selectedIds.length} 项` })}>全部完成</button>
+          <button onClick={() => bulkCollapse(selectedIds, true)}>折叠</button>
+          <button onClick={() => bulkCollapse(selectedIds, false)}>展开</button>
           <button onClick={() => chainDependencies(selectedIds, { source: 'mind', action: '批量建立依赖', detail: `串联 ${selectedIds.length} 项` })}>串联依赖</button>
           <button onClick={() => bulkShift(selectedIds, 1, { source: 'mind', action: '批量改期', detail: `${selectedIds.length} 项 +1 天` })}>后移 1 天</button>
           <button
@@ -626,7 +729,11 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
             <span style={{ color: '#f97316' }}>┄ 关键路径</span>
           </div>
           <div className="mind-hint">
-            左键单击=选中 · <b>左键拖出方框=框选</b> · <b>右键长按拖动=移动画布</b> · <b>右键单击=功能菜单</b> · 拖节点到别的节点上=改层级 · 拖右侧圆点=建依赖
+            左键单击=选中 · <b>左键拖出方框=框选</b> · <b>右键长按拖动=移动画布</b> · <b>右键单击=功能菜单</b> ·{' '}
+            {useTaskStore.getState().settings.dragToReparent
+              ? '拖节点到别的节点上=改层级 · '
+              : '拖节点只改位置不改层级（可在⚙设置开启） · '}
+            点节点 ⇢ = 创建新节点 / 链接已有节点
           </div>
         </>
       )}

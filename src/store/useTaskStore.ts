@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { Canvas, DEFAULT_CANVAS_ID, DEFAULT_SETTINGS, DEFAULT_SHOW_IN_CALENDAR, LogEntry, Settings, Source, Task, TaskKind, TrashItem, ViewId } from '../types';
+import { Canvas, DEFAULT_CANVAS_ID, DEFAULT_SETTINGS, DEFAULT_SHOW_IN_CALENDAR, LogEntry, ProgressMode, Settings, Source, Task, TaskKind, TrashItem, ViewId } from '../types';
 import { addDays, diffDays, maxDate, today } from '../lib/date';
-import { descendantsOf, flattenTree, normalize, topoSort } from '../lib/schedule';
+import { childrenOf, descendantsOf, flattenTree, normalize, topoSort } from '../lib/schedule';
 import { blankTasks, sampleTasks } from '../lib/sample';
 
 interface Meta {
@@ -18,6 +18,8 @@ interface Meta {
 interface Snapshot {
   tasks: Task[];
   selectedId: string | null;
+  /** 节点手动摆放位置：撤销/重做时一并回滚，保证排版改动也能撤销 */
+  positions: Record<string, { x: number; y: number }>;
   /** 触发这一步的动作名，用于「撤销 XXX」提示 */
   label: string;
 }
@@ -60,19 +62,32 @@ interface State {
   removeCanvas: (id: string) => void;
   setSettings: (patch: Partial<Settings>) => void;
   setPosition: (id: string, pos: { x: number; y: number }) => void;
+  /** 批量写入节点位置（拖拽多选时用），会记入撤销栈 */
+  setPositions: (entries: Record<string, { x: number; y: number }>, meta: Meta) => void;
   resetLayout: () => void;
   select: (id: string | null) => void;
   setSelection: (ids: string[]) => void;
   toggleCollapse: (id: string) => void;
+  /** 批量折叠 / 展开（用于框选后批量操作） */
+  bulkCollapse: (ids: string[], collapsed: boolean, meta?: Meta) => void;
+  /** 全部折叠 / 全部展开当前画布里有子任务的节点 */
+  collapseAll: () => void;
+  expandAll: () => void;
   setDayWidth: (w: number) => void;
   setHideDone: (v: boolean) => void;
   setPanelOpen: (v: boolean) => void;
+  /** 任务详情面板折叠开关 */
+  setPanelCollapsed: (v: boolean) => void;
 
   addTask: (init: Partial<Task> & { parentId?: string | null }, meta: Meta) => string;
   addChild: (parentId: string | null, meta: Meta, kind?: TaskKind) => string;
   updateTask: (id: string, patch: Partial<Task>, meta: Meta) => void;
   removeTask: (id: string, meta: Meta) => void;
   setProgress: (id: string, progress: number, meta: Meta) => void;
+  /** 切换单个任务的进度模式（自动汇总 / 自由设定） */
+  setProgressMode: (id: string, mode: ProgressMode, meta: Meta) => void;
+  /** 批量切换进度模式 */
+  bulkProgressMode: (ids: string[], mode: ProgressMode, meta: Meta) => void;
   toggleDone: (id: string, meta: Meta) => void;
   setDates: (id: string, startDate: string, dueDate: string, meta: Meta) => void;
   shiftDates: (id: string, days: number, meta: Meta) => void;
@@ -149,6 +164,7 @@ function changedIds(before: Task[], after: Task[]): string[] {
       o.kind !== t.kind ||
       o.showInCalendar !== t.showInCalendar ||
       o.canvasId !== t.canvasId ||
+      (o.progressMode ?? 'auto') !== (t.progressMode ?? 'auto') ||
       o.dependsOn.join(',') !== t.dependsOn.join(',')
     ) {
       ids.add(id);
@@ -226,11 +242,15 @@ export const useTaskStore = create<State>()(
         }
 
         // 撤销步：同一 coalesce key 在 900ms 内视为一次连续操作，只保留拖动前的那一步
+        // 快照同时记下节点位置，这样"拖动节点改排版"也能被撤销/重做还原
         const merged =
           !!meta.coalesce && !!s.lastCoalesce && s.lastCoalesce.key === meta.coalesce && now - s.lastCoalesce.ts < 900;
         const past = merged
           ? s.past
-          : [...s.past, { tasks: prev, selectedId: s.selectedId, label: meta.action }].slice(-UNDO_LIMIT);
+          : [
+              ...s.past,
+              { tasks: prev, selectedId: s.selectedId, positions: s.positions, label: meta.action },
+            ].slice(-UNDO_LIMIT);
 
         set({
           tasks: normalized,
@@ -332,6 +352,25 @@ export const useTaskStore = create<State>()(
 
         setPosition: (id, pos) => set((s) => ({ positions: { ...s.positions, [id]: pos } })),
 
+        /**
+         * 批量写位置并记入撤销栈：拖动节点时用，撤销/重做可还原排版。
+         * 整批只在「按下→抬起」结束时提交一次，避免拖拽过程刷屏。
+         */
+        setPositions: (entries, meta) => {
+          const s = get();
+          const next = { ...s.positions };
+          for (const [id, p] of Object.entries(entries)) next[id] = p;
+          set({
+            positions: next,
+            past: [
+              ...s.past,
+              { tasks: s.tasks, selectedId: s.selectedId, positions: s.positions, label: meta.action },
+            ].slice(-UNDO_LIMIT),
+            future: [],
+            lastCoalesce: null,
+          });
+        },
+
         resetLayout: () =>
           set((s) => {
             const keep = { ...s.positions };
@@ -354,9 +393,62 @@ export const useTaskStore = create<State>()(
           set({ selectedIds: ids, selectedId: ids.length ? ids[ids.length - 1] : null });
         },
         toggleCollapse: (id) => set((s) => ({ collapsed: { ...s.collapsed, [id]: !s.collapsed[id] } })),
+
+        bulkCollapse: (ids, want, meta) => {
+          if (!ids.length) return;
+          const parentIds = new Set(childrenOf(get().tasks, null).map((t) => t.id));
+          for (const t of get().tasks) parentIds.add(t.id);
+          const next = { ...get().collapsed };
+          // 只有"自己确实有子任务"的节点才值得折叠/展开
+          let n = 0;
+          for (const id of ids) {
+            if (!parentIds.has(id)) continue;
+            if (!childrenOf(get().tasks, id).length) continue;
+            if (!!next[id] === want) continue;
+            next[id] = want;
+            n++;
+          }
+          if (!n) return;
+          if (meta) {
+            const s = get();
+            const entry: LogEntry = {
+              id: uid(),
+              ts: Date.now(),
+              time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+              source: meta.source,
+              action: meta.action,
+              detail: meta.detail ?? '',
+              affected: ids,
+            };
+            set({ collapsed: next, log: [entry, ...s.log].slice(0, 40) });
+          } else {
+            set({ collapsed: next });
+          }
+        },
+
+        collapseAll: () =>
+          set((s) => {
+            const next: Record<string, boolean> = {};
+            for (const t of s.tasks) {
+              if (t.canvasId === s.currentCanvasId && childrenOf(s.tasks, t.id).length) next[t.id] = true;
+            }
+            return { collapsed: next };
+          }),
+
+        expandAll: () =>
+          set((s) => {
+            const next: Record<string, boolean> = {};
+            // 保留折叠标记但全部置为展开（false = 展开）
+            for (const t of s.tasks) {
+              if (t.canvasId === s.currentCanvasId && childrenOf(s.tasks, t.id).length) next[t.id] = false;
+            }
+            return { collapsed: next };
+          }),
+
         setDayWidth: (w) => set({ dayWidth: Math.min(56, Math.max(8, w)) }),
         setHideDone: (v) => set({ hideDone: v }),
         setPanelOpen: (v) => set({ panelOpen: v }),
+        setPanelCollapsed: (v) => set((s) => ({ settings: { ...s.settings, panelCollapsed: v } })),
 
         addTask: (init, meta) => {
           const st = get();
@@ -392,6 +484,7 @@ export const useTaskStore = create<State>()(
             kind,
             showInCalendar: init.showInCalendar ?? (kind === 'plan' ? false : settings.defaultInCalendar),
             canvasId: st.currentCanvasId,
+            progressMode: init.progressMode ?? settings.defaultProgressMode,
           };
           commit([...tasks, task], meta, { selectedId: id });
           return id;
@@ -411,14 +504,42 @@ export const useTaskStore = create<State>()(
         setProgress: (id, progress, meta) => {
           const p = Math.round(Math.min(100, Math.max(0, progress)));
           const tasks = get().tasks;
+          const self = tasks.find((t) => t.id === id);
           // 父任务进度由子任务汇总而来，直接勾选父任务时级联到整棵子树
           const kids = descendantsOf(tasks, id);
+          // 进度模式为「自动汇总」且自己确有子任务时，进度由子任务决定，不允许手动拖动
+          const selfLocked = !!self && (self.progressMode ?? 'auto') === 'auto' && childrenOf(tasks, id).length > 0;
           commit(
-            tasks.map((t) =>
-              t.id === id || kids.has(t.id) ? { ...t, progress: p, statusLocked: p >= 100 ? false : t.statusLocked } : t,
-            ),
+            tasks.map((t) => {
+              if (kids.has(t.id)) return { ...t, progress: p, statusLocked: p >= 100 ? false : t.statusLocked };
+              if (t.id === id) {
+                if (selfLocked) return t;
+                return { ...t, progress: p, statusLocked: p >= 100 ? false : t.statusLocked };
+              }
+              return t;
+            }),
             meta,
             { selectedId: id },
+          );
+        },
+
+        setProgressMode: (id, mode, meta) => {
+          const tasks = get().tasks;
+          commit(
+            tasks.map((t) => (t.id === id ? { ...t, progressMode: mode } : t)),
+            meta,
+            { selectedId: id },
+          );
+        },
+
+        bulkProgressMode: (ids, mode, meta) => {
+          if (!ids.length) return;
+          const set2 = new Set(ids);
+          const tasks = get().tasks;
+          commit(
+            tasks.map((t) => (set2.has(t.id) ? { ...t, progressMode: mode } : t)),
+            meta,
+            { selectedIds: ids, selectedId: ids[ids.length - 1] },
           );
         },
 
@@ -597,8 +718,12 @@ export const useTaskStore = create<State>()(
           set({
             tasks: snap.tasks,
             selectedId: snap.selectedId ?? s.selectedId,
+            positions: snap.positions ?? s.positions,
             past: s.past.slice(0, -1),
-            future: [{ tasks: s.tasks, selectedId: s.selectedId, label: snap.label }, ...s.future].slice(0, UNDO_LIMIT),
+            future: [
+              { tasks: s.tasks, selectedId: s.selectedId, positions: s.positions, label: snap.label },
+              ...s.future,
+            ].slice(0, UNDO_LIMIT),
             log: [entry, ...s.log].slice(0, 40),
             lastCoalesce: null,
           });
@@ -620,7 +745,11 @@ export const useTaskStore = create<State>()(
           set({
             tasks: snap.tasks,
             selectedId: snap.selectedId ?? s.selectedId,
-            past: [...s.past, { tasks: s.tasks, selectedId: s.selectedId, label: snap.label }].slice(-UNDO_LIMIT),
+            positions: snap.positions ?? s.positions,
+            past: [
+              ...s.past,
+              { tasks: s.tasks, selectedId: s.selectedId, positions: s.positions, label: snap.label },
+            ].slice(-UNDO_LIMIT),
             future: s.future.slice(1),
             log: [entry, ...s.log].slice(0, 40),
             lastCoalesce: null,
@@ -660,7 +789,10 @@ export const useTaskStore = create<State>()(
           const s = get();
           set({
             trash: s.trash.filter((x) => x.id !== trashId),
-            past: [...s.past, { tasks: s.tasks, selectedId: s.selectedId, label: '彻底删除回收站项' }].slice(-UNDO_LIMIT),
+            past: [
+              ...s.past,
+              { tasks: s.tasks, selectedId: s.selectedId, positions: s.positions, label: '彻底删除回收站项' },
+            ].slice(-UNDO_LIMIT),
             future: [],
             lastCoalesce: null,
           });
@@ -671,7 +803,10 @@ export const useTaskStore = create<State>()(
           if (!s.trash.length) return;
           set({
             trash: [],
-            past: [...s.past, { tasks: s.tasks, selectedId: s.selectedId, label: '清空回收站' }].slice(-UNDO_LIMIT),
+            past: [
+              ...s.past,
+              { tasks: s.tasks, selectedId: s.selectedId, positions: s.positions, label: '清空回收站' },
+            ].slice(-UNDO_LIMIT),
             future: [],
             lastCoalesce: null,
           });

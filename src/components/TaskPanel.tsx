@@ -20,12 +20,16 @@ export default function TaskPanel({ derived }: { derived: Record<string, Derived
   const setView = useTaskStore((s) => s.setView);
   const setKind = useTaskStore((s) => s.setKind);
   const toggleCalendar = useTaskStore((s) => s.toggleCalendar);
+  const setProgressMode = useTaskStore((s) => s.setProgressMode);
+  const setPanelCollapsed = useTaskStore((s) => s.setPanelCollapsed);
   const settings = useTaskStore((s) => s.settings);
   /** 具体起止时间：默认折叠；已有时间或设置开启时自动展开 */
   const [showTime, setShowTime] = useState(false);
 
   const task = tasks.find((t) => t.id === selectedId) ?? null;
   const d = task ? derived[task.id] : undefined;
+  /** 自动汇总模式（默认）：含子任务时进度由子任务算，不可手动拖动 */
+  const autoProgress = task ? (task.progressMode ?? 'auto') === 'auto' && !!d?.hasChildren : false;
 
   useEffect(() => {
     if (task) setShowTime(!!(task.startTime || task.endTime) || settings.timesExpanded);
@@ -47,10 +51,25 @@ export default function TaskPanel({ derived }: { derived: Record<string, Derived
     return tasks.filter((t) => !banned.has(t.id));
   }, [task, tasks]);
 
+  /** 面板折叠：仅保留标题与展开按钮，让出屏幕空间（设置项可记住偏好） */
+  if (settings.panelCollapsed) {
+    return (
+      <aside className="panel panel-collapsed">
+        <div className="panel-head-row">
+          <h3 style={{ margin: 0 }}>任务详情</h3>
+          <button className="icon" onClick={() => setPanelCollapsed(false)} title="展开面板">▸</button>
+        </div>
+      </aside>
+    );
+  }
+
   if (!task || !d) {
     return (
       <aside className="panel">
-        <h3>任务详情</h3>
+        <div className="panel-head-row">
+          <h3>任务详情</h3>
+          <button className="icon" onClick={() => setPanelCollapsed(true)} title="折叠面板">▾</button>
+        </div>
         <div className="panel-empty">
           在任一视图中点击任务即可编辑。
           <br />
@@ -65,7 +84,10 @@ export default function TaskPanel({ derived }: { derived: Record<string, Derived
 
   return (
     <aside className="panel">
-      <h3>任务详情</h3>
+      <div className="panel-head-row">
+        <h3>任务详情</h3>
+        <button className="icon" onClick={() => setPanelCollapsed(true)} title="折叠面板">▾</button>
+      </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0 10px' }}>
         <StatusPill status={d.status} />
         {d.critical && <span className="pill" style={{ color: '#fca5a5', borderColor: 'rgba(249,115,22,0.5)', background: 'rgba(249,115,22,0.15)' }}>关键路径</span>}
@@ -120,13 +142,33 @@ export default function TaskPanel({ derived }: { derived: Record<string, Derived
         </div>
       </div>
 
-      <label>进度 {task.progress}%</label>
+      <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>进度 {task.progress}%</span>
+        <select
+          className="mini"
+          value={task.progressMode ?? 'auto'}
+          title="进度模式：自动=按子任务汇总（不可拖）；自由=手动设定"
+          onChange={(e) => setProgressMode(task.id, e.target.value as 'auto' | 'manual', { source: 'panel', action: '切换进度模式', detail: `${task.title} → ${e.target.value === 'manual' ? '自由设定' : '自动汇总'}` })}
+        >
+          <option value="auto">自动汇总</option>
+          <option value="manual">自由设定</option>
+        </select>
+      </label>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <input type="range" min={0} max={100} value={task.progress} style={{ padding: 0 }} onChange={(e) => setProgress(task.id, Number(e.target.value), { source: 'panel', action: '调整进度', detail: `${task.title} → ${e.target.value}%` })} />
+        <input
+          type="range"
+          min={0}
+          max={100}
+          value={task.progress}
+          disabled={autoProgress}
+          style={{ padding: 0, opacity: autoProgress ? 0.5 : 1 }}
+          onChange={(e) => setProgress(task.id, Number(e.target.value), { source: 'panel', action: '调整进度', detail: `${task.title} → ${e.target.value}%` })}
+        />
         <button onClick={() => setProgress(task.id, task.progress >= 100 ? 0 : 100, { source: 'panel', action: task.progress >= 100 ? '取消完成' : '标记完成', detail: task.title })}>
           {task.progress >= 100 ? '取消完成' : '标记完成'}
         </button>
       </div>
+      {autoProgress && <div className="panel-hint">此任务含子任务且为「自动汇总」模式，进度由子任务完成度自动计算，不可手动拖动。如需手动设定，请将上方模式切到「自由设定」。</div>}
 
       <div className="row">
         <div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Derived } from '../types';
 import { STATUS_COLOR } from '../types';
 import { useTaskStore } from '../store/useTaskStore';
@@ -18,13 +18,27 @@ export default function GanttView({ derived, compact }: { derived: Record<string
   const collapsed = useTaskStore((s) => s.collapsed);
   const dayWidth = useTaskStore((s) => s.dayWidth);
   const selectedId = useTaskStore((s) => s.selectedId);
+  const selectedIds = useTaskStore((s) => s.selectedIds);
+  const setSelection = useTaskStore((s) => s.setSelection);
   const hideDone = useTaskStore((s) => s.hideDone);
   const select = useTaskStore((s) => s.select);
   const toggleCollapse = useTaskStore((s) => s.toggleCollapse);
+  const bulkCollapse = useTaskStore((s) => s.bulkCollapse);
+  const collapseAll = useTaskStore((s) => s.collapseAll);
+  const expandAll = useTaskStore((s) => s.expandAll);
   const setDayWidth = useTaskStore((s) => s.setDayWidth);
+  const setDates = useTaskStore((s) => s.setDates);
+  const clearSelOnOutsideClick = useTaskStore((s) => s.settings.clearSelOnOutsideClick);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ id: string; mode: DragMode; startX: number; base: { start: string; due: string }; barLeft: number; barWidth: number; applied: number; isSummary: boolean } | null>(null);
+  /** 行内日期编辑：正在改哪一行的哪个端点 */
+  const [dateEdit, setDateEdit] = useState<{ id: string; edge: 'start' | 'due' } | null>(null);
+  /** 框选矩形（视口坐标） */
+  const [box, setBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const dragSel = useRef<{ startX: number; startY: number; moved: boolean } | null>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const selSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
   const rows = useMemo(() => {
     const list = flattenTree(tasks, collapsed);
@@ -76,6 +90,68 @@ export default function GanttView({ derived, compact }: { derived: Record<string
     rows.forEach((t, i) => m.set(t.id, i));
     return m;
   }, [rows]);
+
+  /* ---------------- 框选：在行区域空白处按下左键拖动 ---------------- */
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const d = dragSel.current;
+      if (!d || d.moved) return;
+      if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) > 5) {
+        d.moved = true;
+        setBox({ x: d.startX, y: d.startY, w: 0, h: 0 });
+      }
+    };
+    const onUpdate = (e: MouseEvent) => {
+      if (!dragSel.current?.moved) return;
+      setBox((b) => (b ? { ...b, w: e.clientX - b.x, h: e.clientY - b.y } : b));
+    };
+    const onUp = (e: MouseEvent) => {
+      const d = dragSel.current;
+      dragSel.current = null;
+      if (!d || !d.moved) { setBox(null); return; }
+      const el = rowsRef.current;
+      if (el) {
+        const L = Math.min(d.startX, e.clientX);
+        const R = Math.max(d.startX, e.clientX);
+        const T = Math.min(d.startY, e.clientY);
+        const B = Math.max(d.startY, e.clientY);
+        const hits: string[] = [];
+        el.querySelectorAll<HTMLElement>('.gantt-row').forEach((row) => {
+          const r = row.getBoundingClientRect();
+          if (r.right >= L && r.left <= R && r.bottom >= T && r.top <= B) {
+            const id = row.dataset.id;
+            if (id) hits.push(id);
+          }
+        });
+        if (hits.length) setSelection(hits);
+        else if (clearSelOnOutsideClick) setSelection([]);
+      }
+      setBox(null);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mousemove', onUpdate);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mousemove', onUpdate);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [setSelection, clearSelOnOutsideClick]);
+
+  /** 行区域按下：可能是框选，也可能是拖条改期 —— 交给各自处理，这里只标记起点 */
+  const onRowsMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    // 进度手柄 / 两端手柄 / 条本身 / 按钮：不参与框选
+    if (target.closest('.gantt-bar') || target.closest('button') || target.closest('input') || target.closest('select')) return;
+    dragSel.current = { startX: e.clientX, startY: e.clientY, moved: false };
+  };
+
+  /** 行点击：单击选中（若刚刚是在框选则忽略） */
+  const onRowClick = (id: string) => {
+    if (dragSel.current?.moved) return;
+    select(id);
+  };
 
   const beginDrag = (e: React.PointerEvent, id: string, mode: DragMode, barLeft: number, barWidth: number) => {
     e.preventDefault();
@@ -191,7 +267,9 @@ export default function GanttView({ derived, compact }: { derived: Record<string
             隐藏已完成
           </button>
         )}
-        {!compact && <span style={{ color: 'var(--muted)' }}>拖动条=改期 · 拖两端=改工期 · 拖条内白色手柄=改进度</span>}
+        <button onClick={collapseAll} title="折叠所有含子任务的行">全部折叠</button>
+        <button onClick={expandAll} title="展开所有行">全部展开</button>
+        {!compact && <span style={{ color: 'var(--muted)' }}>拖动条=改期 · 拖两端=改工期 · 拖条内白色手柄=改进度 · 左键拖空白=框选 · 点日期可直接改</span>}
         <span className="pill s-delayed" style={{ marginLeft: 'auto' }}>
           <i className="dot" style={{ background: STATUS_COLOR.delayed }} />
           关键路径 {rows.filter((t) => derived[t.id]?.critical).length} 项
@@ -258,7 +336,7 @@ export default function GanttView({ derived, compact }: { derived: Record<string
             </div>
           </div>
 
-          <div className="gantt-body" style={{ height: rows.length * ROW_H }}>
+          <div className="gantt-body" style={{ height: rows.length * ROW_H }} ref={rowsRef} onMouseDown={onRowsMouseDown}>
             <div className="gantt-grid" style={{ left: LEFT_W, width: days.length * dayWidth }}>
               {days.map((d) => (
                 <div
@@ -278,30 +356,74 @@ export default function GanttView({ derived, compact }: { derived: Record<string
               const left = xOf(t.startDate);
               const width = Math.max(dayWidth * 0.6, durationOf(t) * dayWidth);
               const isSummary = !!d?.hasChildren;
+              const isSel = selSet.has(t.id);
               return (
                 <div
                   key={t.id}
-                  className={`gantt-row${selectedId === t.id ? ' selected' : ''}`}
+                  data-id={t.id}
+                  className={`gantt-row${selectedId === t.id ? ' selected' : ''}${isSel ? ' rowsel' : ''}`}
                   style={{ height: ROW_H, width: totalW }}
+                  onClick={() => onRowClick(t.id)}
                 >
                   <div className="gantt-left" style={{ width: LEFT_W }}>
                     <span style={{ paddingLeft: (d?.depth ?? 0) * 12 }} />
                     <button
                       className="icon ghost"
                       style={{ border: 'none', padding: 0, width: 14, color: 'var(--muted)' }}
-                      onClick={() => toggleCollapse(t.id)}
+                      onClick={(e) => { e.stopPropagation(); toggleCollapse(t.id); }}
                       title="折叠/展开子任务"
                     >
                       {d?.hasChildren ? (collapsed[t.id] ? '▸' : '▾') : ''}
                     </button>
                     <div
                       className={`gantt-label${d?.isDone ? ' done' : ''}`}
-                      onClick={() => select(t.id)}
                       title={t.title}
                       style={{ paddingLeft: 2 }}
                     >
                       {t.title}
                     </div>
+                    {/* 日期：点一下就能直接改 */}
+                    <span className="gantt-dates" onClick={(e) => e.stopPropagation()}>
+                      {dateEdit?.id === t.id && dateEdit.edge === 'start' ? (
+                        <input
+                          type="date"
+                          autoFocus
+                          className="gantt-date-input"
+                          value={t.startDate}
+                          onChange={(e) => e.target.value && setDates(t.id, e.target.value, t.dueDate, { source: 'gantt', action: '修改开始日', detail: `${t.title} → ${e.target.value}` })}
+                          onBlur={() => setDateEdit(null)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') setDateEdit(null); }}
+                        />
+                      ) : (
+                        <span
+                          className="gantt-date-cell"
+                          title="点击修改开始日期"
+                          onClick={(e) => { e.stopPropagation(); setDateEdit({ id: t.id, edge: 'start' }); }}
+                        >
+                          {t.startDate.slice(5)}
+                        </span>
+                      )}
+                      <em>→</em>
+                      {dateEdit?.id === t.id && dateEdit.edge === 'due' ? (
+                        <input
+                          type="date"
+                          autoFocus
+                          className="gantt-date-input"
+                          value={t.dueDate}
+                          onChange={(e) => e.target.value && setDates(t.id, t.startDate, e.target.value, { source: 'gantt', action: '修改截止日', detail: `${t.title} → ${e.target.value}` })}
+                          onBlur={() => setDateEdit(null)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') setDateEdit(null); }}
+                        />
+                      ) : (
+                        <span
+                          className="gantt-date-cell"
+                          title="点击修改截止日期"
+                          onClick={(e) => { e.stopPropagation(); setDateEdit({ id: t.id, edge: 'due' }); }}
+                        >
+                          {t.dueDate.slice(5)}
+                        </span>
+                      )}
+                    </span>
                     <span style={{ fontSize: 10, color: 'var(--muted)' }}>{t.progress}%</span>
                     <i className="dot" style={{ width: 7, height: 7, borderRadius: '50%', background: color }} />
                   </div>
@@ -319,12 +441,14 @@ export default function GanttView({ derived, compact }: { derived: Record<string
                       <>
                         <div className="gantt-bar-handle l" onPointerDown={(e) => beginDrag(e, t.id, 'l', left, width)} />
                         <div className="gantt-bar-handle r" onPointerDown={(e) => beginDrag(e, t.id, 'r', left, width)} />
-                        <div
-                          className="gantt-prog-handle"
-                          style={{ left: `calc(${t.progress}% - 4px)` }}
-                          onPointerDown={(e) => beginDrag(e, t.id, 'progress', left, width)}
-                          title="拖动改进度"
-                        />
+                        {((t.progressMode ?? 'auto') === 'manual' || !d?.hasChildren) && (
+                          <div
+                            className="gantt-prog-handle"
+                            style={{ left: `calc(${t.progress}% - 4px)` }}
+                            onPointerDown={(e) => beginDrag(e, t.id, 'progress', left, width)}
+                            title="拖动改进度"
+                          />
+                        )}
                       </>
                     )}
                   </div>
@@ -363,6 +487,17 @@ export default function GanttView({ derived, compact }: { derived: Record<string
           </div>
         </div>
       </div>
+
+      {box && <div className="gantt-box" style={{ left: box.x, top: box.y, width: box.w, height: box.h }} />}
+
+      {selectedIds.length > 1 && !compact && (
+        <div className="gantt-selbar">
+          已框选 <b>{selectedIds.length}</b> 项
+          <button onClick={() => bulkCollapse(selectedIds, true)} title="折叠所选（含子任务的节点）">折叠所选</button>
+          <button onClick={() => bulkCollapse(selectedIds, false)}>展开所选</button>
+          <button onClick={() => setSelection([])}>取消</button>
+        </div>
+      )}
     </>
   );
 }

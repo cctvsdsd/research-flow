@@ -123,25 +123,33 @@ export function rollUp(input: Task[]): Task[] {
     const t = out[i];
     const list = kids.get(t.id) ?? [];
     if (!list.length) continue;
+    // 日期始终取子任务并集
     let start = list[0].startDate;
     let due = list[0].dueDate;
-    let wSum = 0;
-    let pSum = 0;
     for (const c of list) {
       start = minDate(start, c.startDate);
       due = maxDate(due, c.dueDate);
-      const w = durationOf(c);
-      wSum += w;
-      pSum += c.progress * w;
     }
-    const progress = wSum ? Math.round(pSum / wSum) : t.progress;
+    // 进度：只有「自动汇总」模式的父任务才按子任务加权平均；「自由设定」保持自身进度
+    const auto = (t.progressMode ?? 'auto') === 'auto';
+    let progress = t.progress;
+    if (auto) {
+      let wSum = 0;
+      let pSum = 0;
+      for (const c of list) {
+        const w = durationOf(c);
+        wSum += w;
+        pSum += c.progress * w;
+      }
+      progress = wSum ? Math.round(pSum / wSum) : t.progress;
+    }
     if (t.startDate === start && t.dueDate === due && t.progress === progress) continue;
     out[i] = { ...t, startDate: start, dueDate: due, progress };
   }
   return out;
 }
 
-/** 老数据补字段：历史存档里没有 kind / showInCalendar，这里兜底，避免升版本丢数据 */
+/** 老数据补字段：历史存档里没有 kind / showInCalendar / progressMode，这里兜底，避免升版本丢数据 */
 export function withDefaults(tasks: Task[]): Task[] {
   return tasks.map((t) => {
     const kind = t.kind ?? 'task';
@@ -150,6 +158,7 @@ export function withDefaults(tasks: Task[]): Task[] {
       dependsOn: t.dependsOn ?? [],
       kind,
       showInCalendar: typeof t.showInCalendar === 'boolean' ? t.showInCalendar : kind === 'task',
+      progressMode: t.progressMode ?? 'auto',
     };
   });
 }

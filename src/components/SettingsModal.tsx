@@ -85,6 +85,44 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                 框选后，点击空白处 / 其他节点 取消框选
               </label>
 
+              <div className="modal-sep" />
+
+              <label className="chk">
+                <input
+                  type="checkbox"
+                  checked={settings.lockPositions}
+                  onChange={(e) => setSettings({ lockPositions: e.target.checked })}
+                />
+                锁定节点排版（推荐开）：已摆放的节点不受其他节点增删/改层级影响，放哪就在哪
+              </label>
+
+              <label className="chk">
+                <input
+                  type="checkbox"
+                  checked={settings.dragToReparent}
+                  onChange={(e) => setSettings({ dragToReparent: e.target.checked })}
+                />
+                拖动节点到另一节点上时，自动建立父子层级（默认关：拖动仅改位置，不代表要连接层级）
+              </label>
+
+              <label>新建任务的默认进度模式</label>
+              <select
+                value={settings.defaultProgressMode}
+                onChange={(e) => setSettings({ defaultProgressMode: e.target.value as 'auto' | 'manual' })}
+              >
+                <option value="auto">自动汇总（由子任务完成度自动计算，不可手拖）</option>
+                <option value="manual">自由设定（可手动拖动进度）</option>
+              </select>
+
+              <label className="chk">
+                <input
+                  type="checkbox"
+                  checked={settings.panelCollapsed}
+                  onChange={(e) => setSettings({ panelCollapsed: e.target.checked })}
+                />
+                默认折叠「任务详情」面板（点击面板内 ▸ 可重新展开）
+              </label>
+
               <div className="modal-note">
                 提示：一个任务是否出现在日历，始终以它本身的「类型 + 单独的日历开关」为准；上面的「默认进日历」只是新建时的初始值，之后仍可单独改。
               </div>

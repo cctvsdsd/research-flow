@@ -25,6 +25,11 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
   const removeTask = useTaskStore((s) => s.removeTask);
   const addChild = useTaskStore((s) => s.addChild);
   const toggleCollapse = useTaskStore((s) => s.toggleCollapse);
+  const bulkCollapse = useTaskStore((s) => s.bulkCollapse);
+  const collapseAll = useTaskStore((s) => s.collapseAll);
+  const expandAll = useTaskStore((s) => s.expandAll);
+  const setDates = useTaskStore((s) => s.setDates);
+  const clearSelOnOutsideClick = useTaskStore((s) => s.settings.clearSelOnOutsideClick);
   const updateTask = useTaskStore((s) => s.updateTask);
   const setStatusLock = useTaskStore((s) => s.setStatusLock);
   const bulkProgress = useTaskStore((s) => s.bulkProgress);
@@ -46,6 +51,8 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
 
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  /** 行内日期编辑：正在改哪一行的哪个端点 */
+  const [dateEdit, setDateEdit] = useState<{ id: string; edge: 'start' | 'due' } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   /** HTML5 拖手柄改层级：被拖行的 id 与命中的目标行 id */
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -90,7 +97,7 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
           }
         });
         if (hits.length) setSelection(hits);
-        else setSelection([]);
+        else if (clearSelOnOutsideClick) setSelection([]);
       }
       setBox(null);
       dragSel.current = null;
@@ -308,6 +315,8 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
           </div>
           <div className="hier-head-right">
             <div className="hier-counts">{projectCount} 个课题 · {taskCount} 个任务</div>
+            <button onClick={collapseAll} title="折叠所有含子任务的行">全部折叠</button>
+            <button onClick={expandAll} title="展开所有行">全部展开</button>
             <button className="hier-primary" onClick={() => onAddRow(null)}>+ 新建课题</button>
           </div>
         </div>
@@ -319,7 +328,7 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
           <span><i style={{ background: STATUS_BAR.doing }} /> 进行中</span>
           <span><i style={{ background: STATUS_BAR.delayed }} /> 延期</span>
           <span><i style={{ background: STATUS_BAR.blocked }} /> 阻塞</span>
-          <span className="hier-hint">单击=选中 · Ctrl/⌘点击=加选 · Shift 点击=范围选 · 左键拖空白=框选 · 右键单击=菜单</span>
+          <span className="hier-hint">单击=选中 · Ctrl/⌘点击=加选 · Shift 点击=范围选 · 左键拖空白=框选 · 右键单击=菜单 · 点日期可直接改</span>
         </div>
       )}
 
@@ -392,7 +401,39 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
 
               {t.kind === 'plan' && <span className="hier-kind-plan">计划</span>}
 
-              <span className="hier-date">{formatCN(t.startDate)} – {formatCN(t.dueDate)}</span>
+              <span className="hier-date" onClick={(e) => e.stopPropagation()}>
+                {dateEdit?.id === t.id && dateEdit.edge === 'start' ? (
+                  <input
+                    type="date"
+                    autoFocus
+                    className="hier-date-input"
+                    value={t.startDate}
+                    onChange={(e) => e.target.value && setDates(t.id, e.target.value, t.dueDate, { source: 'hierarchy', action: '修改开始日', detail: `${t.title} → ${e.target.value}` })}
+                    onBlur={() => setDateEdit(null)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') setDateEdit(null); }}
+                  />
+                ) : (
+                  <span className="hier-date-cell" title="点击修改开始日期" onClick={() => setDateEdit({ id: t.id, edge: 'start' })}>
+                    {formatCN(t.startDate)}
+                  </span>
+                )}
+                <em> – </em>
+                {dateEdit?.id === t.id && dateEdit.edge === 'due' ? (
+                  <input
+                    type="date"
+                    autoFocus
+                    className="hier-date-input"
+                    value={t.dueDate}
+                    onChange={(e) => e.target.value && setDates(t.id, t.startDate, e.target.value, { source: 'hierarchy', action: '修改截止日', detail: `${t.title} → ${e.target.value}` })}
+                    onBlur={() => setDateEdit(null)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') setDateEdit(null); }}
+                  />
+                ) : (
+                  <span className="hier-date-cell" title="点击修改截止日期" onClick={() => setDateEdit({ id: t.id, edge: 'due' })}>
+                    {formatCN(t.dueDate)}
+                  </span>
+                )}
+              </span>
 
               <span className="hier-row-actions" onClick={(e) => e.stopPropagation()}>
                 <button title="新增子任务" onClick={() => onAddRow(t.id)}>+</button>
@@ -431,6 +472,8 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
           <button onClick={() => bulkProgress(selectedIds, 100, { source: 'hierarchy', action: '批量完成', detail: `${selectedIds.length} 项` })}>全部完成</button>
           <button onClick={() => chainDependencies(selectedIds, { source: 'hierarchy', action: '批量建立依赖', detail: `串联 ${selectedIds.length} 项` })}>串联依赖</button>
           <button onClick={() => bulkShift(selectedIds, 1, { source: 'hierarchy', action: '批量改期', detail: `${selectedIds.length} 项 +1` })}>后移 1 天</button>
+          <button onClick={() => bulkCollapse(selectedIds, true, { source: 'hierarchy', action: '批量折叠', detail: `${selectedIds.length} 项` })} title="折叠所选（含子任务的节点）">折叠所选</button>
+          <button onClick={() => bulkCollapse(selectedIds, false, { source: 'hierarchy', action: '批量展开', detail: `${selectedIds.length} 项` })}>展开所选</button>
           <button
             className="danger"
             onClick={() => {

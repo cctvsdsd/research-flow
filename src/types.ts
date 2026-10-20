@@ -8,6 +8,13 @@ export type Source = 'mind' | 'gantt' | 'calendar' | 'hierarchy' | 'panel' | 'sy
 /** 计划 = 还没进排期的构思（默认不进日历）；任务 = 已排期的执行项（默认进日历） */
 export type TaskKind = 'plan' | 'task';
 
+/**
+ * 进度模式：
+ * - auto：进度由子任务完成度自动汇总，界面上不可拖动（默认）
+ * - manual：自由拖动设定
+ */
+export type ProgressMode = 'auto' | 'manual';
+
 export interface Task {
   id: string;
   title: string;
@@ -31,6 +38,8 @@ export interface Task {
   showInCalendar: boolean;
   /** 所属画布 id（多画布隔离用） */
   canvasId: string;
+  /** 进度模式：auto=由子任务自动汇总（默认，不可拖）；manual=自由设定 */
+  progressMode?: ProgressMode;
 }
 
 /** 回收站条目：整棵子树连同结构信息一起暂存，保证能原样还原 */
@@ -127,6 +136,21 @@ export interface Settings {
   timesExpanded: boolean;
   /** 框选后，点击非选中目标（空白/其他节点）是否取消框选 */
   clearSelOnOutsideClick: boolean;
+  /**
+   * 锁定节点排版：开启后，思维导图里已摆放好的节点位置不会被任何其他节点的
+   * 新增/删除/改层级而重新排布，节点放哪就固定在哪（默认开）。
+   * 关闭则恢复"结构变化时自动重排"。
+   */
+  lockPositions: boolean;
+  /**
+   * 拖动节点到另一个节点上时，是否自动改变父子层级关系。
+   * 默认关闭 —— 拖动只是摆放位置，不代表要建立层级（可用右键菜单或详情面板改层级）。
+   */
+  dragToReparent: boolean;
+  /** 新建任务的默认进度模式 */
+  defaultProgressMode: ProgressMode;
+  /** 详情面板（任务详情）是否折叠 */
+  panelCollapsed: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -135,6 +159,10 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultDuration: 5,
   timesExpanded: false,
   clearSelOnOutsideClick: true,
+  lockPositions: true,
+  dragToReparent: false,
+  defaultProgressMode: 'auto',
+  panelCollapsed: false,
 };
 
 export const DEFAULT_CANVAS_ID = 'default';
