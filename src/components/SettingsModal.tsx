@@ -123,6 +123,15 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                 默认折叠「任务详情」面板（点击面板内 ▸ 可重新展开）
               </label>
 
+              <label className="chk">
+                <input
+                  type="checkbox"
+                  checked={settings.showMinimap}
+                  onChange={(e) => setSettings({ showMinimap: e.target.checked })}
+                />
+                显示思维导图右下角的「节点总览小地图」（工具栏也可一键开关）
+              </label>
+
               <div className="modal-note">
                 提示：一个任务是否出现在日历，始终以它本身的「类型 + 单独的日历开关」为准；上面的「默认进日历」只是新建时的初始值，之后仍可单独改。
               </div>

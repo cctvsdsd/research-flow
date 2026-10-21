@@ -151,6 +151,8 @@ export interface Settings {
   defaultProgressMode: ProgressMode;
   /** 详情面板（任务详情）是否折叠 */
   panelCollapsed: boolean;
+  /** 思维导图右下角的「节点总览小地图」是否显示（默认开） */
+  showMinimap: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -163,6 +165,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dragToReparent: false,
   defaultProgressMode: 'auto',
   panelCollapsed: false,
+  showMinimap: true,
 };
 
 export const DEFAULT_CANVAS_ID = 'default';

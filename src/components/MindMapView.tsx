@@ -262,6 +262,8 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
   const positions = useTaskStore((s) => s.positions);
   const setPositions = useTaskStore((s) => s.setPositions);
   const lockPositions = useTaskStore((s) => s.settings.lockPositions);
+  const showMinimap = useTaskStore((s) => s.settings.showMinimap);
+  const setSettings = useTaskStore((s) => s.setSettings);
   const collapsed = useTaskStore((s) => s.collapsed);
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const setSelection = useTaskStore((s) => s.setSelection);
@@ -655,7 +657,7 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
       >
         <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="#22304d" />
         {!compact && <Controls showInteractive={false} />}
-        {!compact && (
+        {!compact && showMinimap && (
           <MiniMap pannable zoomable nodeColor={(n) => STATUS_COLOR[(n.data as TaskNodeData).derived?.status ?? 'todo']} maskColor="rgba(10,14,24,0.75)" />
         )}
       </ReactFlow>
@@ -694,6 +696,13 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
             展开所选
           </button>
           <button onClick={() => fitView({ padding: 0.18, duration: 300 })}>适应画布</button>
+          <button
+            onClick={() => setSettings({ showMinimap: !showMinimap })}
+            title={showMinimap ? '关闭右下角节点总览小地图' : '打开右下角节点总览小地图'}
+            style={showMinimap ? { borderColor: '#4f7cff', color: '#9db8ff' } : undefined}
+          >
+            {showMinimap ? '◱ 关闭总览' : '◱ 开启总览'}
+          </button>
         </div>
       )}
 
