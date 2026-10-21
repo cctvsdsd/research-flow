@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Background,
   BackgroundVariant,
@@ -67,12 +67,13 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
   };
 
   /** 连接菜单里的候选节点：排除自己与自己的整棵子树，避免成环 */
-  const linkCandidates = useTaskStore((s) => {
-    const self = s.tasks.find((t) => t.id === id);
+  const tasksForLink = useTaskStore((s) => s.tasks);
+  const linkCandidates = useMemo(() => {
+    const self = tasksForLink.find((t) => t.id === id);
     if (!self) return [] as Task[];
-    const banned = new Set<string>([id, ...descendantsOf(s.tasks, id)]);
-    return s.tasks.filter((t) => t.canvasId === self.canvasId && !banned.has(t.id));
-  });
+    const banned = new Set<string>([id, ...descendantsOf(tasksForLink, id)]);
+    return tasksForLink.filter((t) => t.canvasId === self.canvasId && !banned.has(t.id));
+  }, [tasksForLink, id]);
 
   /** 在此节点下创建一个新节点（用于"创建新节点"选项） */
   const createAndLink = () => {
@@ -344,40 +345,39 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 固化新节点位置：独立 effect，只依赖 tasks（不依赖 positions，避免无限循环）
+  useEffect(() => {
+    if (!lockPositions) return;
+    const layout = treeLayout(tasks, collapsed);
+    const fresh: Record<string, { x: number; y: number }> = {};
+    const current = useTaskStore.getState().positions; // 读最新值，不进闭包
+    let changed = false;
+    for (const t of tasks) {
+      if (current[t.id]) continue;
+      const p = layout.get(t.id);
+      if (!p) continue;
+      fresh[t.id] = p;
+      changed = true;
+    }
+    if (changed) {
+      // 直接写 store（不走撤销栈）：这只是"记录初始位置"，不是用户操作
+      useTaskStore.setState((s) => ({ positions: { ...s.positions, ...fresh } }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, lockPositions]);
+
   useEffect(() => {
     const layout = treeLayout(tasks, collapsed);
     const vis = visibleIds(tasks, collapsed);
     const selSet = new Set(selectedIds);
 
-    /**
-     * 锁定排版的关键：
-     * 自动布局只用于「从未被摆放过的新节点」。已有位置的一律沿用，
-     * 因此新增/删除/改层级都不会让其他节点跳位。
-     * 首次见到某节点时把布局结果固化进 positions，之后它就再也不会被重排。
-     */
-    const fresh: Record<string, { x: number; y: number }> = {};
-    if (lockPositions) {
-      let changed = false;
-      for (const t of tasks) {
-        if (positions[t.id]) continue;
-        const p = layout.get(t.id);
-        if (!p) continue;
-        fresh[t.id] = p;
-        changed = true;
-      }
-      if (changed) {
-        // 直接写 store（不走撤销栈）：这只是"记录初始位置"，不是用户操作
-        useTaskStore.setState((s) => ({ positions: { ...s.positions, ...fresh } }));
-      }
-    }
-
+    // 已有位置一律沿用；没有位置的用自动布局兜底（但不写入 store，上面那个 effect 负责）
     const next: TaskFlowNode[] = tasks
       .filter((t) => vis.has(t.id))
       .map((t) => ({
         id: t.id,
         type: 'task' as const,
-        // 手动摆放过的位置优先；没有则使用自动布局（新节点），且不会因改日期/改结构而跳回
-        position: positions[t.id] ?? fresh[t.id] ?? layout.get(t.id) ?? { x: 0, y: 0 },
+        position: positions[t.id] ?? layout.get(t.id) ?? { x: 0, y: 0 },
         selected: selSet.has(t.id),
         data: {
           task: t,
@@ -431,7 +431,7 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
       }
     }
     setEdges(nextEdges);
-  }, [tasks, collapsed, selectedIds, derived, renamingId, positions, setNodes, setEdges]);
+  }, [tasks, collapsed, selectedIds, derived, renamingId, positions, lockPositions, setNodes, setEdges]);
 
   useEffect(() => {
     const t = setTimeout(() => fitView({ padding: 0.18, duration: 250 }), 80);
