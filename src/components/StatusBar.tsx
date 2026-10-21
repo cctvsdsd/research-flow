@@ -10,6 +10,9 @@ const SRC_LABEL: Record<Source, string> = {
   system: '系统',
 };
 
+/** 构建版本戳：每次发布改这里，方便确认线上是否部署到了最新版 */
+const BUILD = '2026-10-21-fix2';
+
 export default function StatusBar({ derived }: { derived: Record<string, Derived> }) {
   const log = useTaskStore((s) => s.log);
   const tasks = useCanvasTasks();
@@ -39,6 +42,7 @@ export default function StatusBar({ derived }: { derived: Record<string, Derived
       ) : (
         <span>在任一视图编辑，三视图即时同步（无需刷新）</span>
       )}
+      <span className="build-stamp" title="构建版本">v {BUILD}</span>
     </footer>
   );
 }
