@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
-import { Derived, STATUS_COLOR } from '../types';
+import { useMemo, useRef, useState, PointerEvent as RPointerEvent } from 'react';
+import { Derived, STATUS_COLOR, Task } from '../types';
 import { useTaskStore, useCanvasTasks } from '../store/useTaskStore';
 import { addDays, diffDays, formatCN, isWeekend, startOfMonth, startOfWeek, today, weekdayCN } from '../lib/date';
 import { durationOf } from '../lib/schedule';
@@ -22,13 +22,20 @@ export default function CalendarView({ derived, compact }: { derived: Record<str
   const [dragOver, setDragOver] = useState<string | null>(null);
   const tRef = today();
 
-  // 日历只呈现「用户选择显示」的任务：与是否完成无关，由每项的 showInCalendar 决定
-  const calTasks = useMemo(() => tasks.filter((t) => t.showInCalendar), [tasks]);
+  // 类型守卫：带日期的任务（日历只排有日期的项）
+  const hasDates = (t: Task): t is Task & { startDate: string; dueDate: string } => !!t.startDate && !!t.dueDate;
+  // 显式类型谓词，确保 .filter 收窄类型（calendar 只排有日期且用户选择显示的项）
+  const isCal = (t: Task): t is Task & { startDate: string; dueDate: string } => t.showInCalendar && hasDates(t);
+
+  // 日历只呈现「用户选择显示」且「有日期」的任务：由每项的 showInCalendar 决定
+  const calTasks = useMemo(() => tasks.filter(isCal), [tasks]);
   const visible = useMemo(
     () => (hideDone ? calTasks.filter((t) => derived[t.id]?.status !== 'done') : calTasks),
     [calTasks, derived, hideDone],
   );
-  const hiddenCount = tasks.length - calTasks.length;
+  const hiddenCount = tasks.filter((t) => hasDates(t) && !t.showInCalendar).length;
+  // 未排期：没有任何日期的任务，集中放在底部桶，可拖入某日赋予日期
+  const unscheduled = useMemo(() => tasks.filter((t) => !hasDates(t)), [tasks]);
 
   const days: string[] = useMemo(() => {
     if (mode === 'month') {
@@ -90,11 +97,50 @@ export default function CalendarView({ derived, compact }: { derived: Record<str
     if (!id) return;
     const t = tasks.find((x) => x.id === id);
     if (!t) return;
+    // 从「未排期」桶拖来的无日期任务：落在某日即赋予单日日期
+    if (!t.startDate || !t.dueDate) {
+      setDates(id, day, day, { source: 'calendar', action: '从未排期放入日历', detail: `「${t.title}」→ ${formatCN(day)}` });
+      return;
+    }
     const dur = durationOf(t);
     const due = day;
     const start = addDays(due, -(dur - 1));
     if (start === t.startDate && due === t.dueDate) return;
     setDates(id, start, due, { source: 'calendar', action: '拖拽改期', detail: `「${t.title}」→ ${formatCN(due)} 截止` });
+  };
+
+  // 边缘拉伸手柄：拖动改变 start / due（Google 日历风格）
+  const resizeRef = useRef<{ id: string; mode: 'l' | 'r'; startX: number; cellW: number; start: string; due: string; applied: number } | null>(null);
+  const beginResize = (e: RPointerEvent, t: Task & { startDate: string; dueDate: string }, mode: 'l' | 'r') => {
+    e.stopPropagation();
+    e.preventDefault();
+    const cell = (e.currentTarget as HTMLElement).closest('.cal-cell, .cal-day-col') as HTMLElement | null;
+    const cellW = cell ? cell.getBoundingClientRect().width : 80;
+    resizeRef.current = { id: t.id, mode, startX: e.clientX, cellW, start: t.startDate, due: t.dueDate, applied: 0 };
+    const move = (ev: PointerEvent) => {
+      const d = resizeRef.current;
+      if (!d) return;
+      const delta = Math.round((ev.clientX - d.startX) / d.cellW);
+      if (delta === d.applied) return;
+      d.applied = delta;
+      let ns = d.start;
+      let nd = d.due;
+      if (d.mode === 'l') {
+        ns = addDays(d.start, delta);
+        if (ns > nd) ns = nd;
+      } else {
+        nd = addDays(d.due, delta);
+        if (nd < ns) nd = ns;
+      }
+      useTaskStore.getState().setDates(d.id, ns, nd, { source: 'calendar', action: mode === 'l' ? '调整开始日' : '调整截止日', detail: t.title });
+    };
+    const up = () => {
+      resizeRef.current = null;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
   };
 
   const newTaskOn = (day: string) => {
@@ -119,8 +165,9 @@ export default function CalendarView({ derived, compact }: { derived: Record<str
         }}
         onDragEnd={() => { draggingIdRef.current = null; }}
         onClick={() => select(t.id)}
-        title={`${t.title}\n${t.startDate} → ${t.dueDate}（${durationOf(t)} 天）\n进度 ${t.progress}%${d?.isBlocked ? '\n阻塞于：' + d.blockedBy.map((b) => tasks.find((x) => x.id === b)?.title).join('、') : ''}`}
+        title={`${t.title}\n${t.startDate} → ${t.dueDate}（${durationOf(t)} 天）\n拖动任务改期 · 拖两端手柄拉伸起止日期\n进度 ${t.progress}%${d?.isBlocked ? '\n阻塞于：' + d.blockedBy.map((b) => tasks.find((x) => x.id === b)?.title).join('、') : ''}`}
       >
+        <span className="chip-resize l" title="拖动改开始日" onPointerDown={(e) => beginResize(e, t, 'l')} />
         <input
           type="checkbox"
           checked={t.progress >= 100}
@@ -134,6 +181,7 @@ export default function CalendarView({ derived, compact }: { derived: Record<str
         {t.kind === 'plan' && <span className="badge kind-plan">计划</span>}
         {basis === 'span' && <span className="badge">{d?.isDone ? '' : `${t.progress}%`}</span>}
         {d?.isDelayed && <span className="badge" style={{ background: 'rgba(239,68,68,0.35)' }}>逾期</span>}
+        <span className="chip-resize r" title="拖动改截止日" onPointerDown={(e) => beginResize(e, t, 'r')} />
       </div>
     );
   };
@@ -233,7 +281,6 @@ export default function CalendarView({ derived, compact }: { derived: Record<str
                       onDragOver={(e) => { e.preventDefault(); setDragOver(day); }}
                       onDragLeave={() => setDragOver((c) => (c === day ? null : c))}
                       onDrop={(e) => { e.preventDefault(); onDrop(day); }}
-                      onDoubleClick={() => newTaskOn(day)}
                     >
                       <div className={`cal-cell-num${day === tRef ? ' today' : ''}`} style={{ opacity: other ? 0.5 : 1 }}>
                         <span>{day === tRef ? `今天 ${Number(day.slice(8, 10))}` : Number(day.slice(8, 10))}</span>
@@ -262,7 +309,7 @@ export default function CalendarView({ derived, compact }: { derived: Record<str
                     <span>周{weekdayCN(day)} {Number(day.slice(8, 10))}日</span>
                     <button className="cal-add" style={{ opacity: 1 }} title="新建任务" onClick={() => newTaskOn(day)}>+</button>
                   </div>
-                  <div className="cal-day-body" onDoubleClick={() => newTaskOn(day)}>
+                  <div className="cal-day-body">
                     {list.map((t) => chip(t, day))}
                   </div>
                 </div>
@@ -271,6 +318,46 @@ export default function CalendarView({ derived, compact }: { derived: Record<str
           </div>
         )}
       </div>
+
+      {unscheduled.length > 0 && (
+        <div className="cal-unscheduled">
+          <div className="cal-unscheduled-head">🗓 未排期（{unscheduled.length}）· 拖到日历某日即可安排日期</div>
+          <div className="cal-unscheduled-list">
+            {unscheduled.map((t) => {
+              const d = derived[t.id];
+              const color = STATUS_COLOR[d?.status ?? 'todo'];
+              return (
+                <div
+                  key={t.id}
+                  className={`chip unsched${d?.isDone ? ' done' : ''}`}
+                  style={{ borderLeftColor: color }}
+                  draggable
+                  onDragStart={(e) => {
+                    draggingIdRef.current = t.id;
+                    e.dataTransfer.setData('text/plain', t.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onDragEnd={() => { draggingIdRef.current = null; }}
+                  onClick={() => select(t.id)}
+                  title={`${t.title}\n未排期 · 拖到日历某日赋予日期`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={t.progress >= 100}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                      e.stopPropagation();
+                      toggleDone(t.id, { source: 'calendar', action: e.target.checked ? '勾选完成' : '取消完成', detail: t.title });
+                    }}
+                  />
+                  <span>{t.title}</span>
+                  {t.kind === 'plan' && <span className="badge kind-plan">计划</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </>
   );
 }

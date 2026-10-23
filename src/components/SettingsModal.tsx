@@ -132,6 +132,76 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
                 显示思维导图右下角的「节点总览小地图」（工具栏也可一键开关）
               </label>
 
+              <div className="modal-sep" />
+
+              <label>父 → 子 连接线默认样式</label>
+              <select
+                value={settings.edgeDefaultTree}
+                onChange={(e) => setSettings({ edgeDefaultTree: e.target.value as 'plain' | 'arrow' | 'dashed' })}
+              >
+                <option value="arrow">箭头线（指向子级）</option>
+                <option value="plain">普通线</option>
+                <option value="dashed">虚线</option>
+              </select>
+
+              <label>依赖 连接线默认样式</label>
+              <select
+                value={settings.edgeDefaultDep}
+                onChange={(e) => setSettings({ edgeDefaultDep: e.target.value as 'plain' | 'arrow' | 'dashed' })}
+              >
+                <option value="dashed">虚线（带箭头）</option>
+                <option value="plain">普通线</option>
+                <option value="arrow">箭头线</option>
+              </select>
+
+              <label>连接线粗细：{settings.edgeWidth.toFixed(1)} px</label>
+              <input
+                type="range"
+                min={0.5}
+                max={5}
+                step={0.2}
+                value={settings.edgeWidth}
+                onChange={(e) => setSettings({ edgeWidth: Number(e.target.value) })}
+              />
+
+              <div className="modal-sep" />
+
+              <label className="chk">
+                <input
+                  type="checkbox"
+                  checked={settings.confirmDelete}
+                  onChange={(e) => setSettings({ confirmDelete: e.target.checked })}
+                />
+                删除节点前先询问确认（关闭后直接删除，不弹窗）
+              </label>
+
+              <label className="chk">
+                <input
+                  type="checkbox"
+                  checked={settings.ganttCollapseTasks}
+                  onChange={(e) => setSettings({ ganttCollapseTasks: e.target.checked })}
+                />
+                甘特图中任务默认折叠（计划默认展开），可手动展开
+              </label>
+
+              <label className="chk">
+                <input
+                  type="checkbox"
+                  checked={settings.showPlanBadge}
+                  onChange={(e) => setSettings({ showPlanBadge: e.target.checked })}
+                />
+                研究结构 / 甘特图中显示「所属计划」徽标
+              </label>
+
+              <label className="chk">
+                <input
+                  type="checkbox"
+                  checked={settings.planInCalendarCollapsed}
+                  onChange={(e) => setSettings({ planInCalendarCollapsed: e.target.checked })}
+                />
+                日历中计划节点默认折叠其下属任务
+              </label>
+
               <div className="modal-note">
                 提示：一个任务是否出现在日历，始终以它本身的「类型 + 单独的日历开关」为准；上面的「默认进日历」只是新建时的初始值，之后仍可单独改。
               </div>

@@ -3,9 +3,9 @@ import { Derived } from '../types';
 import { STATUS_COLOR } from '../types';
 import { useTaskStore } from '../store/useTaskStore';
 import { useCanvasTasks } from '../store/useTaskStore';
-import { addDays, diffDays, isWeekend, maxDate, minDate, parseDate, today } from '../lib/date';
+import { addDays, addDaysSafe, diffDays, isWeekend, maxDateSafe, minDateSafe, parseDate, today } from '../lib/date';
 import { flattenTree } from '../lib/schedule';
-import { durationOf } from '../lib/schedule';
+import { durationOf, childrenOf } from '../lib/schedule';
 
 const ROW_H = 32;
 
@@ -29,9 +29,13 @@ export default function GanttView({ derived, compact }: { derived: Record<string
   const setDayWidth = useTaskStore((s) => s.setDayWidth);
   const setDates = useTaskStore((s) => s.setDates);
   const clearSelOnOutsideClick = useTaskStore((s) => s.settings.clearSelOnOutsideClick);
+  const ganttCollapseTasks = useTaskStore((s) => s.settings.ganttCollapseTasks);
+  const showPlanBadge = useTaskStore((s) => s.settings.showPlanBadge);
+  const hideNotInCal = useTaskStore((s) => s.hideNotInCal);
+  const setHideNotInCal = useTaskStore((s) => s.setHideNotInCal);
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ id: string; mode: DragMode; startX: number; base: { start: string; due: string }; barLeft: number; barWidth: number; applied: number; isSummary: boolean } | null>(null);
+  const drag = useRef<{ id: string; mode: DragMode; startX: number; base: { start: string | null; due: string | null }; barLeft: number; barWidth: number; applied: number; isSummary: boolean } | null>(null);
   /** 行内日期编辑：正在改哪一行的哪个端点 */
   const [dateEdit, setDateEdit] = useState<{ id: string; edge: 'start' | 'due' } | null>(null);
   /** 框选矩形（视口坐标） */
@@ -40,21 +44,47 @@ export default function GanttView({ derived, compact }: { derived: Record<string
   const rowsRef = useRef<HTMLDivElement>(null);
   const selSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
+  // 甘特默认折叠：当 ganttCollapseTasks 开启时，仅任务型节点默认收起子级，计划型节点默认展开
+  const effCollapsed = useMemo(() => {
+    const c: Record<string, boolean> = { ...collapsed };
+    if (ganttCollapseTasks) {
+      for (const t of tasks) {
+        if (t.kind === 'task' && childrenOf(tasks, t.id).length > 0) c[t.id] = true;
+      }
+    }
+    return c;
+  }, [collapsed, ganttCollapseTasks, tasks]);
+
   const rows = useMemo(() => {
-    const list = flattenTree(tasks, collapsed);
-    return hideDone ? list.filter((t) => derived[t.id]?.status !== 'done') : list;
-  }, [tasks, collapsed, hideDone, derived]);
+    let list = flattenTree(tasks, effCollapsed);
+    if (hideDone) list = list.filter((t) => derived[t.id]?.status !== 'done');
+    if (hideNotInCal) list = list.filter((t) => t.showInCalendar);
+    return list;
+  }, [tasks, effCollapsed, hideDone, hideNotInCal, derived]);
+
+  // 父计划标题表：用于行内「所属计划」徽标
+  const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
+  const parentPlanOf = (id: string): string | null => {
+    let cur = byId.get(id)?.parentId ?? null;
+    while (cur) {
+      const p = byId.get(cur);
+      if (!p) break;
+      if (p.kind === 'plan') return p.title;
+      cur = p.parentId;
+    }
+    return null;
+  };
 
   const { rangeStart, days } = useMemo(() => {
-    if (!tasks.length) return { rangeStart: today(), days: [today()] };
-    let min = tasks[0].startDate;
-    let max = tasks[0].dueDate;
+    let min: string | null = null;
+    let max: string | null = null;
     for (const t of tasks) {
-      min = minDate(min, t.startDate);
-      max = maxDate(max, t.dueDate);
+      min = minDateSafe(min, t.startDate);
+      max = maxDateSafe(max, t.dueDate);
     }
-    const start = addDays(min, -7);
-    const end = addDays(max, 14);
+    // 没有任何带日期的任务时，默认展示以今天为中心的区间
+    const start = min ? addDays(min, -7) : addDays(today(), -7);
+    const end = max ? addDays(max, 14) : addDays(today(), 30);
     const arr: string[] = [];
     for (let d = start; diffDays(d, end) >= 0; d = addDays(d, 1)) arr.push(d);
     return { rangeStart: start, days: arr };
@@ -174,16 +204,16 @@ export default function GanttView({ derived, compact }: { derived: Record<string
             st.shiftDates(d.id, step, { source: 'gantt', action: '拖动调整排期', detail: `${st.tasks.find((x) => x.id === d.id)?.title ?? ''} ${deltaDays >= 0 ? '+' : ''}${deltaDays} 天` });
           }
         } else {
-          st.setDates(d.id, addDays(d.base.start, deltaDays), addDays(d.base.due, deltaDays), {
+          st.setDates(d.id, addDaysSafe(d.base.start, deltaDays), addDaysSafe(d.base.due, deltaDays), {
             source: 'gantt',
             action: '拖动调整排期',
             detail: `${st.tasks.find((x) => x.id === d.id)?.title ?? ''} ${deltaDays >= 0 ? '+' : ''}${deltaDays} 天`,
           });
         }
       } else if (d.mode === 'r') {
-        st.setDates(d.id, d.base.start, maxDate(d.base.start, addDays(d.base.due, deltaDays)), { source: 'gantt', action: '调整截止日', detail: st.tasks.find((x) => x.id === d.id)?.title ?? '' });
+        st.setDates(d.id, d.base.start, maxDateSafe(d.base.start, addDaysSafe(d.base.due, deltaDays)), { source: 'gantt', action: '调整截止日', detail: st.tasks.find((x) => x.id === d.id)?.title ?? '' });
       } else if (d.mode === 'l') {
-        st.setDates(d.id, minDate(d.base.due, addDays(d.base.start, deltaDays)), d.base.due, { source: 'gantt', action: '调整开始日', detail: st.tasks.find((x) => x.id === d.id)?.title ?? '' });
+        st.setDates(d.id, minDateSafe(d.base.due, addDaysSafe(d.base.start, deltaDays)), d.base.due, { source: 'gantt', action: '调整开始日', detail: st.tasks.find((x) => x.id === d.id)?.title ?? '' });
       } else {
         const pct = Math.round(((ev.clientX - d.barLeft) / d.barWidth) * 100);
         st.setProgress(d.id, pct, { source: 'gantt', action: '拖动改进度', detail: `${st.tasks.find((x) => x.id === d.id)?.title ?? ''} → ${Math.min(100, Math.max(0, pct))}%` });
@@ -224,7 +254,7 @@ export default function GanttView({ derived, compact }: { derived: Record<string
         const ft = byId.get(from)!;
         const f = rowIndex.get(from);
         const g = rowIndex.get(to)!;
-        if (f === undefined) continue;
+        if (f === undefined || !ft.dueDate || !t.startDate) continue;
         out.push({
           key,
           x1: xOf(ft.dueDate) + dayWidth,
@@ -265,6 +295,11 @@ export default function GanttView({ derived, compact }: { derived: Record<string
         {!compact && (
           <button className={hideDone ? 'active' : ''} onClick={() => useTaskStore.getState().setHideDone(!hideDone)}>
             隐藏已完成
+          </button>
+        )}
+        {!compact && (
+          <button className={hideNotInCal ? 'active' : ''} onClick={() => setHideNotInCal(!hideNotInCal)} title="仅显示已加入日历的任务">
+            仅看日历内
           </button>
         )}
         <button onClick={collapseAll} title="折叠所有含子任务的行">全部折叠</button>
@@ -353,8 +388,8 @@ export default function GanttView({ derived, compact }: { derived: Record<string
             {rows.map((t) => {
               const d = derived[t.id];
               const color = STATUS_COLOR[d?.status ?? 'todo'];
-              const left = xOf(t.startDate);
-              const width = Math.max(dayWidth * 0.6, durationOf(t) * dayWidth);
+              const left = t.startDate ? xOf(t.startDate) : LEFT_W;
+              const width = t.startDate && t.dueDate ? Math.max(dayWidth * 0.6, durationOf(t) * dayWidth) : 0;
               const isSummary = !!d?.hasChildren;
               const isSel = selSet.has(t.id);
               return (
@@ -373,7 +408,7 @@ export default function GanttView({ derived, compact }: { derived: Record<string
                       onClick={(e) => { e.stopPropagation(); toggleCollapse(t.id); }}
                       title="折叠/展开子任务"
                     >
-                      {d?.hasChildren ? (collapsed[t.id] ? '▸' : '▾') : ''}
+                      {d?.hasChildren ? (effCollapsed[t.id] ? '▸' : '▾') : ''}
                     </button>
                     <div
                       className={`gantt-label${d?.isDone ? ' done' : ''}`}
@@ -382,6 +417,11 @@ export default function GanttView({ derived, compact }: { derived: Record<string
                     >
                       {t.title}
                     </div>
+                    {showPlanBadge && parentPlanOf(t.id) && (
+                      <span className="plan-badge" title={`所属计划：${parentPlanOf(t.id)}`}>
+                        {parentPlanOf(t.id)}
+                      </span>
+                    )}
                     {/* 日期：点一下就能直接改 */}
                     <span className="gantt-dates" onClick={(e) => e.stopPropagation()}>
                       {dateEdit?.id === t.id && dateEdit.edge === 'start' ? (
@@ -389,8 +429,8 @@ export default function GanttView({ derived, compact }: { derived: Record<string
                           type="date"
                           autoFocus
                           className="gantt-date-input"
-                          value={t.startDate}
-                          onChange={(e) => e.target.value && setDates(t.id, e.target.value, t.dueDate, { source: 'gantt', action: '修改开始日', detail: `${t.title} → ${e.target.value}` })}
+                          value={t.startDate ?? ''}
+                          onChange={(e) => setDates(t.id, e.target.value || null, t.dueDate, { source: 'gantt', action: '修改开始日', detail: `${t.title} → ${e.target.value}` })}
                           onBlur={() => setDateEdit(null)}
                           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') setDateEdit(null); }}
                         />
@@ -400,7 +440,7 @@ export default function GanttView({ derived, compact }: { derived: Record<string
                           title="点击修改开始日期"
                           onClick={(e) => { e.stopPropagation(); setDateEdit({ id: t.id, edge: 'start' }); }}
                         >
-                          {t.startDate.slice(5)}
+                          {t.startDate ? t.startDate.slice(5) : '无'}
                         </span>
                       )}
                       <em>→</em>
@@ -409,8 +449,8 @@ export default function GanttView({ derived, compact }: { derived: Record<string
                           type="date"
                           autoFocus
                           className="gantt-date-input"
-                          value={t.dueDate}
-                          onChange={(e) => e.target.value && setDates(t.id, t.startDate, e.target.value, { source: 'gantt', action: '修改截止日', detail: `${t.title} → ${e.target.value}` })}
+                          value={t.dueDate ?? ''}
+                          onChange={(e) => setDates(t.id, t.startDate, e.target.value || null, { source: 'gantt', action: '修改截止日', detail: `${t.title} → ${e.target.value}` })}
                           onBlur={() => setDateEdit(null)}
                           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') setDateEdit(null); }}
                         />
@@ -420,7 +460,7 @@ export default function GanttView({ derived, compact }: { derived: Record<string
                           title="点击修改截止日期"
                           onClick={(e) => { e.stopPropagation(); setDateEdit({ id: t.id, edge: 'due' }); }}
                         >
-                          {t.dueDate.slice(5)}
+                          {t.dueDate ? t.dueDate.slice(5) : '无'}
                         </span>
                       )}
                     </span>

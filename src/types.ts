@@ -15,14 +15,24 @@ export type TaskKind = 'plan' | 'task';
  */
 export type ProgressMode = 'auto' | 'manual';
 
+/** 连线样式类型：普通线 / 箭头线 / 虚线 */
+export type EdgeType = 'plain' | 'arrow' | 'dashed';
+
+/** 单条连线的样式覆盖（存于 store.edgeStyles，按 edgeId 索引） */
+export interface EdgeStyle {
+  type: EdgeType;
+  /** 线宽（px） */
+  width: number;
+}
+
 export interface Task {
   id: string;
   title: string;
   parentId: string | null;
   dependsOn: string[];
-  /** YYYY-MM-DD */
-  startDate: string;
-  dueDate: string;
+  /** YYYY-MM-DD；为 null 表示「无日期」（未排期） */
+  startDate: string | null;
+  dueDate: string | null;
   /** 起止具体时间 HH:MM，可选；为空字符串表示不设置（默认项） */
   startTime?: string;
   endTime?: string;
@@ -68,8 +78,8 @@ export interface Derived {
   isDelayed: boolean;
   isBlocked: boolean;
   blockedBy: string[];
-  /** 依赖约束下的最早可开始日 */
-  earliestStart: string;
+  /** 依赖约束下的最早可开始日（无日期任务为 null） */
+  earliestStart: string | null;
   /** 总浮动天数 */
   slack: number;
   critical: boolean;
@@ -153,6 +163,20 @@ export interface Settings {
   panelCollapsed: boolean;
   /** 思维导图右下角的「节点总览小地图」是否显示（默认开） */
   showMinimap: boolean;
+  /** 删除节点前是否弹确认框（默认开；关闭则一键删除不询问） */
+  confirmDelete: boolean;
+  /** 父→子树边默认样式 */
+  edgeDefaultTree: EdgeType;
+  /** 依赖边默认样式 */
+  edgeDefaultDep: EdgeType;
+  /** 连线默认粗细（px） */
+  edgeWidth: number;
+  /** 甘特图：任务节点是否默认折叠（默认开；计划节点始终默认展开） */
+  ganttCollapseTasks: boolean;
+  /** 任务行是否显示所属的父计划来源徽标（默认开） */
+  showPlanBadge: boolean;
+  /** 计划节点进日历时是否默认折叠（默认开） */
+  planInCalendarCollapsed: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -166,6 +190,13 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultProgressMode: 'auto',
   panelCollapsed: false,
   showMinimap: true,
+  confirmDelete: true,
+  edgeDefaultTree: 'arrow',
+  edgeDefaultDep: 'dashed',
+  edgeWidth: 1.6,
+  ganttCollapseTasks: true,
+  showPlanBadge: true,
+  planInCalendarCollapsed: true,
 };
 
 export const DEFAULT_CANVAS_ID = 'default';

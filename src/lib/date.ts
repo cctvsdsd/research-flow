@@ -37,6 +37,30 @@ export function maxDate(a: string, b: string): string {
   return a >= b ? a : b;
 }
 
+/** 以下 *Safe 版本均允许 null（表示「无日期」），参与运算时忽略 null 一方 */
+
+export function addDaysSafe(s: string | null, n: number): string | null {
+  if (!s) return null;
+  return addDays(s, n);
+}
+
+export function diffDaysSafe(a: string | null, b: string | null): number {
+  if (!a || !b) return 0;
+  return diffDays(a, b);
+}
+
+export function minDateSafe(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a <= b ? a : b;
+}
+
+export function maxDateSafe(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a >= b ? a : b;
+}
+
 export function startOfWeek(s: string): string {
   const d = parseDate(s);
   const dow = (d.getUTCDay() + 6) % 7; // 周一为 0
@@ -55,7 +79,8 @@ export function addMonths(s: string, n: number): string {
   return toISO(nd);
 }
 
-export function formatCN(s: string): string {
+export function formatCN(s: string | null | undefined): string {
+  if (!s) return '无';
   const [, m, d] = s.split('-');
   return `${Number(m)}月${Number(d)}日`;
 }

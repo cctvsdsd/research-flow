@@ -1,8 +1,9 @@
 import { Derived, Task } from '../types';
-import { addDays, diffDays, maxDate, minDate, today } from './date';
+import { addDays, addDaysSafe, diffDays, maxDate, maxDateSafe, minDate, minDateSafe, today } from './date';
 
-/** 工期（含首尾） */
+/** 工期（含首尾）；任一日期为 null 时返回 0（未排期） */
 export function durationOf(t: Task): number {
+  if (!t.startDate || !t.dueDate) return 0;
   return Math.max(1, diffDays(t.startDate, t.dueDate) + 1);
 }
 
@@ -74,16 +75,18 @@ export function reschedule(input: Task[]): Task[] {
   for (const id of order) {
     const i = pos.get(id)!;
     const t = out[i];
+    // 无日期任务不参与顺延
+    if (!t.startDate) continue;
     let earliest = t.startDate;
     for (const depId of t.dependsOn) {
       const dep = map.get(depId);
-      if (!dep) continue;
+      if (!dep || !dep.dueDate) continue;
       const req = addDays(dep.dueDate, 1);
       if (diffDays(earliest, req) > 0) earliest = req;
     }
     if (earliest !== t.startDate) {
-      const dur = durationOf(t);
-      out[i] = { ...t, startDate: earliest, dueDate: addDays(earliest, dur - 1) };
+      const dur = Math.max(1, durationOf(t));
+      out[i] = { ...t, startDate: earliest, dueDate: addDaysSafe(earliest, dur - 1)! };
       map.set(id, out[i]);
     }
   }
@@ -123,12 +126,14 @@ export function rollUp(input: Task[]): Task[] {
     const t = out[i];
     const list = kids.get(t.id) ?? [];
     if (!list.length) continue;
-    // 日期始终取子任务并集
-    let start = list[0].startDate;
-    let due = list[0].dueDate;
-    for (const c of list) {
-      start = minDate(start, c.startDate);
-      due = maxDate(due, c.dueDate);
+    // 自身无日期的节点（如新计划）保持无日期，不被子任务并集覆盖
+    let start: string | null = t.startDate;
+    let due: string | null = t.dueDate;
+    if (t.startDate !== null && t.dueDate !== null) {
+      for (const c of list) {
+        start = minDateSafe(start, c.startDate);
+        due = maxDateSafe(due, c.dueDate);
+      }
     }
     // 进度：只有「自动汇总」模式的父任务才按子任务加权平均；「自由设定」保持自身进度
     const auto = (t.progressMode ?? 'auto') === 'auto';
@@ -153,10 +158,17 @@ export function rollUp(input: Task[]): Task[] {
 export function withDefaults(tasks: Task[]): Task[] {
   return tasks.map((t) => {
     const kind = t.kind ?? 'task';
+    const normDate = (d: unknown): string | null => {
+      if (d === null || d === undefined) return null;
+      if (typeof d !== 'string') return null;
+      return d === '' ? null : d;
+    };
     return {
       ...t,
       dependsOn: t.dependsOn ?? [],
       kind,
+      startDate: normDate(t.startDate),
+      dueDate: normDate(t.dueDate),
       showInCalendar: typeof t.showInCalendar === 'boolean' ? t.showInCalendar : kind === 'task',
       progressMode: t.progressMode ?? 'auto',
     };
@@ -181,8 +193,8 @@ export function computeDerived(tasks: Task[], refDay: string = today()): Record<
   const map = indexById(tasks);
   const { order, cyclic } = topoSort(tasks);
   const dur = new Map<string, number>();
-  const es = new Map<string, string>();
-  const ef = new Map<string, string>();
+  const es = new Map<string, string | null>();
+  const ef = new Map<string, string | null>();
   const succ = new Map<string, string[]>();
   const pred = new Map<string, string[]>();
 
@@ -199,12 +211,18 @@ export function computeDerived(tasks: Task[], refDay: string = today()): Record<
     }
   }
 
-  // 前向：ES / EF（考虑自身计划日期作为下界）
+  // 前向：ES / EF（考虑自身计划日期作为下界）；无日期任务跳过 CPM
   for (const id of order) {
     const t = map.get(id)!;
+    if (!t.startDate || !t.dueDate) {
+      es.set(id, null);
+      ef.set(id, null);
+      continue;
+    }
     let start = t.startDate;
     for (const dep of pred.get(id)!) {
       const depTask = map.get(dep)!;
+      if (!depTask.dueDate) continue;
       const req = addDays(depTask.dueDate, 1);
       if (diffDays(start, req) > 0) start = req;
     }
@@ -214,22 +232,29 @@ export function computeDerived(tasks: Task[], refDay: string = today()): Record<
   // 环内任务兜底
   for (const id of cyclic) {
     const t = map.get(id)!;
-    es.set(id, t.startDate);
-    ef.set(id, t.dueDate);
+    const dated = !!t.startDate && !!t.dueDate;
+    es.set(id, dated ? t.startDate : null);
+    ef.set(id, dated ? t.dueDate : null);
   }
 
-  let projectEnd = ef.get(order[0]) ?? refDay;
-  for (const id of order) projectEnd = maxDate(projectEnd, ef.get(id)!);
+  let projectEnd: string = refDay;
+  for (const id of order) {
+    const e = ef.get(id);
+    if (e) projectEnd = maxDate(projectEnd, e);
+  }
 
-  // 后向：LS / LF → 总浮动
+  // 后向：LS / LF → 总浮动（仅对有日期任务计算）
   const lf = new Map<string, string>();
   const ls = new Map<string, string>();
   for (let i = order.length - 1; i >= 0; i--) {
     const id = order[i];
+    const t = map.get(id)!;
+    if (!t.startDate || !t.dueDate) continue;
     const s = succ.get(id)!.filter((x) => ls.has(x));
     // 后继的最晚开始日 - 1 天 = 本任务的最晚完成日
     let finish = s.length ? s.reduce((acc, x) => minDate(acc, addDays(ls.get(x)!, -1)), addDays(ls.get(s[0])!, -1)) : projectEnd;
-    finish = maxDate(finish, ef.get(id)!);
+    const e = ef.get(id);
+    if (e) finish = maxDate(finish, e);
     lf.set(id, finish);
     ls.set(id, addDays(finish, -(dur.get(id)! - 1)));
   }
@@ -256,7 +281,7 @@ export function computeDerived(tasks: Task[], refDay: string = today()): Record<
     const blockedBy = t.dependsOn.filter((d) => map.has(d) && map.get(d)!.progress < 100);
     const isDone = t.progress >= 100;
     const isBlocked = blockedBy.length > 0 && !isDone;
-    const isDelayed = !isDone && diffDays(t.dueDate, refDay) > 0;
+    const isDelayed = !!t.dueDate && !isDone && diffDays(t.dueDate, refDay) > 0;
     let status: Task['status'];
     if (t.statusLocked) status = t.status;
     else if (isDone) status = 'done';
@@ -265,8 +290,9 @@ export function computeDerived(tasks: Task[], refDay: string = today()): Record<
     else if (t.progress > 0) status = 'doing';
     else status = 'todo';
 
-    const slack = ls.has(t.id) && es.has(t.id) ? diffDays(es.get(t.id)!, ls.get(t.id)!) : 0;
-    const critical = !cyclic.has(t.id) && slack <= 0 && !isDone && (pred.get(t.id)!.length > 0 || succ.get(t.id)!.length > 0);
+    const hasDates = !!t.startDate && !!t.dueDate;
+    const slack = hasDates && ls.has(t.id) && es.has(t.id) ? diffDays(es.get(t.id)!, ls.get(t.id)!) : 0;
+    const critical = hasDates && !cyclic.has(t.id) && slack <= 0 && !isDone && ((pred.get(t.id)?.length ?? 0) > 0 || (succ.get(t.id)?.length ?? 0) > 0);
 
     res[t.id] = {
       status,
@@ -321,8 +347,15 @@ export function flattenTree(tasks: Task[], collapsed: Record<string, boolean> = 
   const out: Task[] = [];
   const walk = (pid: string) => {
     const list = kids.get(pid) ?? [];
-    // 按开始日期排序，保证甘特图行序稳定
-    list.sort((a, b) => (a.startDate === b.startDate ? a.title.localeCompare(b.title) : a.startDate < b.startDate ? -1 : 1));
+    // 按开始日期排序，保证甘特图行序稳定（无日期排到最后）
+    list.sort((a, b) => {
+      const sa = a.startDate;
+      const sb = b.startDate;
+      if (sa === sb) return a.title.localeCompare(b.title);
+      if (!sa) return 1;
+      if (!sb) return -1;
+      return sa < sb ? -1 : 1;
+    });
     for (const t of list) {
       out.push(t);
       if (!collapsed[t.id]) walk(t.id);

@@ -4,6 +4,7 @@ import { useTaskStore } from '../store/useTaskStore';
 import { useCanvasTasks } from '../store/useTaskStore';
 import { flattenTree } from '../lib/schedule';
 import { formatCN } from '../lib/date';
+import { askDelete } from '../lib/confirmDelete';
 import ContextMenu, { MenuEntry } from './ContextMenu';
 
 const STATUS_BAR: Record<string, string> = {
@@ -44,8 +45,26 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
   const bulkKind = useTaskStore((s) => s.bulkKind);
   const undo = useTaskStore((s) => s.undo);
   const redo = useTaskStore((s) => s.redo);
+  const showPlanBadge = useTaskStore((s) => s.settings.showPlanBadge);
+  const hideNotInCal = useTaskStore((s) => s.hideNotInCal);
+  const setHideNotInCal = useTaskStore((s) => s.setHideNotInCal);
 
-  const rows = useMemo(() => flattenTree(tasks, collapsed), [tasks, collapsed]);
+  const parentPlanOf = (id: string): string | null => {
+    let cur = byId.get(id)?.parentId ?? null;
+    while (cur) {
+      const p = byId.get(cur);
+      if (!p) break;
+      if (p.kind === 'plan') return p.title;
+      cur = p.parentId;
+    }
+    return null;
+  };
+
+  const rows = useMemo(() => {
+    let list = flattenTree(tasks, collapsed);
+    if (hideNotInCal) list = list.filter((t) => t.showInCalendar);
+    return list;
+  }, [tasks, collapsed, hideNotInCal]);
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
   const selSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
@@ -186,7 +205,7 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
       { kind: 'item', label: '全部加入日历', onClick: () => bulkCalendar(ids, true, { source: 'hierarchy', action: '批量加日历', detail: `${n} 项` }) },
       { kind: 'item', label: '全部移出日历', onClick: () => bulkCalendar(ids, false, { source: 'hierarchy', action: '批量移出日历', detail: `${n} 项` }) },
       { kind: 'sep' },
-      { kind: 'item', label: `删除这 ${n} 项（含子任务）`, danger: true, onClick: () => { if (confirm(`删除选中的 ${n} 个任务？三视图将同步移除。`)) bulkRemove(ids, { source: 'hierarchy', action: '批量删除', detail: `${n} 项` }); } },
+      { kind: 'item', label: `删除这 ${n} 项（含子任务）`, danger: true, onClick: () => { if (askDelete(`删除选中的 ${n} 个任务？三视图将同步移除。`)) bulkRemove(ids, { source: 'hierarchy', action: '批量删除', detail: `${n} 项` }); } },
       { kind: 'item', label: '取消选择', onClick: () => setSelection([]) },
     ];
   };
@@ -223,7 +242,7 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
       { kind: 'item', label: '在甘特图中定位', onClick: () => { select(id); setView('gantt'); } },
       { kind: 'item', label: '在日历中定位', onClick: () => { select(id); setView('calendar'); } },
       { kind: 'sep' },
-      { kind: 'item', label: '删除（含子任务）', danger: true, onClick: () => { if (confirm(`删除「${t.title}」？三视图将同步移除。`)) removeTask(id, { source: 'hierarchy', action: '删除', detail: t.title }); } },
+      { kind: 'item', label: '删除（含子任务）', danger: true, onClick: () => { if (askDelete(`删除「${t.title}」？三视图将同步移除。`)) removeTask(id, { source: 'hierarchy', action: '删除', detail: t.title }); } },
     ];
   };
 
@@ -317,6 +336,11 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
             <div className="hier-counts">{projectCount} 个课题 · {taskCount} 个任务</div>
             <button onClick={collapseAll} title="折叠所有含子任务的行">全部折叠</button>
             <button onClick={expandAll} title="展开所有行">全部展开</button>
+            {!compact && (
+              <button className={hideNotInCal ? 'active' : ''} onClick={() => setHideNotInCal(!hideNotInCal)} title="仅显示已加入日历的任务">
+                仅看日历内
+              </button>
+            )}
             <button className="hier-primary" onClick={() => onAddRow(null)}>+ 新建课题</button>
           </div>
         </div>
@@ -392,6 +416,11 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
               ) : (
                 <span className="hier-title">{t.title}</span>
               )}
+              {showPlanBadge && parentPlanOf(t.id) && (
+                <span className="plan-badge" title={`所属计划：${parentPlanOf(t.id)}`}>
+                  {parentPlanOf(t.id)}
+                </span>
+              )}
 
               <span className="hier-pill" style={{ color: STATUS_COLOR[d?.status ?? 'todo'] }}>
                 <i style={{ background: STATUS_COLOR[d?.status ?? 'todo'] }} />
@@ -407,7 +436,7 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
                     type="date"
                     autoFocus
                     className="hier-date-input"
-                    value={t.startDate}
+                    value={t.startDate ?? ''}
                     onChange={(e) => e.target.value && setDates(t.id, e.target.value, t.dueDate, { source: 'hierarchy', action: '修改开始日', detail: `${t.title} → ${e.target.value}` })}
                     onBlur={() => setDateEdit(null)}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') setDateEdit(null); }}
@@ -423,7 +452,7 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
                     type="date"
                     autoFocus
                     className="hier-date-input"
-                    value={t.dueDate}
+                    value={t.dueDate ?? ''}
                     onChange={(e) => e.target.value && setDates(t.id, t.startDate, e.target.value, { source: 'hierarchy', action: '修改截止日', detail: `${t.title} → ${e.target.value}` })}
                     onBlur={() => setDateEdit(null)}
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') setDateEdit(null); }}
@@ -450,7 +479,7 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
                   title="删除"
                   className="danger"
                   onClick={() => {
-                    if (confirm(`删除「${t.title}」？三视图将同步移除。`))
+                    if (askDelete(`删除「${t.title}」？三视图将同步移除。`))
                       removeTask(t.id, { source: 'hierarchy', action: '删除', detail: t.title });
                   }}
                 >
@@ -477,7 +506,7 @@ export default function HierarchyView({ derived, compact }: { derived: Record<st
           <button
             className="danger"
             onClick={() => {
-              if (confirm(`删除选中的 ${selectedIds.length} 个任务？三视图将同步移除。`))
+              if (askDelete(`删除选中的 ${selectedIds.length} 个任务？三视图将同步移除。`))
                 bulkRemove(selectedIds, { source: 'hierarchy', action: '批量删除', detail: `${selectedIds.length} 项` });
             }}
           >

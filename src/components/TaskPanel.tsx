@@ -3,6 +3,7 @@ import { Derived, KIND_LABEL, STATUS_LABEL, Status } from '../types';
 import { useTaskStore, useCanvasTasks } from '../store/useTaskStore';
 import { descendantsOf, durationOf, topoSort } from '../lib/schedule';
 import { formatCN } from '../lib/date';
+import { askDelete } from '../lib/confirmDelete';
 import { StatusPill } from './common';
 
 export default function TaskPanel({ derived }: { derived: Record<string, Derived> }) {
@@ -173,11 +174,17 @@ export default function TaskPanel({ derived }: { derived: Record<string, Derived
       <div className="row">
         <div>
           <label>开始日期</label>
-          <input type="date" value={task.startDate} onChange={(e) => e.target.value && setDates(task.id, e.target.value, task.dueDate, { source: 'panel', action: '修改开始日', detail: `${task.title} → ${e.target.value}` })} />
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <input type="date" value={task.startDate ?? ''} onChange={(e) => setDates(task.id, e.target.value || null, task.dueDate, { source: 'panel', action: '修改开始日', detail: `${task.title} → ${e.target.value}` })} />
+            <button className="icon ghost" title="清除为「无」" onClick={() => setDates(task.id, null, task.dueDate, { source: 'panel', action: '清除开始日', detail: task.title })}>无</button>
+          </div>
         </div>
         <div>
           <label>截止日期</label>
-          <input type="date" value={task.dueDate}               onChange={(e) => e.target.value && setDates(task.id, task.startDate, e.target.value, { source: 'panel', action: '修改截止日', detail: `${task.title} → ${e.target.value}` })} />
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            <input type="date" value={task.dueDate ?? ''} onChange={(e) => setDates(task.id, task.startDate, e.target.value || null, { source: 'panel', action: '修改截止日', detail: `${task.title} → ${e.target.value}` })} />
+            <button className="icon ghost" title="清除为「无」" onClick={() => setDates(task.id, task.startDate, null, { source: 'panel', action: '清除截止日', detail: task.title })}>无</button>
+          </div>
         </div>
       </div>
 
@@ -269,7 +276,7 @@ export default function TaskPanel({ derived }: { derived: Record<string, Derived
           style={{ color: '#fca5a5', borderColor: 'rgba(239,68,68,0.5)' }}
           onClick={() => {
             const n = d.subtreeSize;
-            if (confirm(`确认删除「${task.title}」${n > 1 ? `及其 ${n - 1} 个子任务` : ''}？三个视图将同步移除。`)) {
+            if (askDelete(`确认删除「${task.title}」${n > 1 ? `及其 ${n - 1} 个子任务` : ''}？三个视图将同步移除。`)) {
               removeTask(task.id, { source: 'panel', action: '删除任务', detail: task.title });
             }
           }}

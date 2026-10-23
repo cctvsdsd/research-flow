@@ -119,6 +119,19 @@ label { display: block; font-size: 11px; color: var(--muted); margin: 8px 0 4px;
 .react-flow__handle { width: 8px; height: 8px; background: var(--panel-2); border: 1px solid var(--border); }
 .react-flow__handle:hover { background: var(--accent); }
 .react-flow__edge-path { stroke-width: 1.6; }
+/* 四向连接点：默认低调，悬停节点显示，便于从任意一面连线 */
+.mm-handle { width: 11px; height: 11px; background: var(--panel-2); border: 1.5px solid var(--accent); opacity: 0; transition: opacity 0.12s; }
+.node:hover .mm-handle, .react-flow__node:hover .mm-handle { opacity: 0.85; }
+.mm-handle:hover { opacity: 1; background: var(--accent); }
+.react-flow__edge { cursor: pointer; }
+.react-flow__edge:hover .react-flow__edge-path { stroke-opacity: 0.7; }
+/* 连线样式编辑浮层 */
+.edge-edit { position: fixed; z-index: 60; width: 220px; padding: 10px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border); box-shadow: 0 8px 30px rgba(0,0,0,0.45); font-size: 12px; }
+.edge-edit-title { font-weight: 600; margin-bottom: 8px; }
+.edge-edit-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.edge-edit-row button { padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel-2); cursor: pointer; }
+.edge-edit-row button.active { border-color: var(--accent); color: var(--accent); background: rgba(79,124,255,0.12); }
+.edge-edit-row input[type=range] { flex: 1; }
 
 /* ---------- Gantt ---------- */
 .gantt-tools { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--bg-soft); flex: 0 0 auto; flex-wrap: wrap; }
@@ -179,16 +192,27 @@ label { display: block; font-size: 11px; color: var(--muted); margin: 8px 0 4px;
 .cal-cell-num { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; }
 .cal-cell-num.today { color: var(--accent); font-weight: 700; }
 .cal-cell-num b { background: var(--accent); color: #fff; border-radius: 10px; padding: 0 5px; font-size: 10px; font-weight: 600; }
-.cal-add { opacity: 0; border: none; background: transparent; color: var(--muted); cursor: pointer; padding: 0 3px; }
-.cal-cell:hover .cal-add { opacity: 1; }
+.cal-add { opacity: 0.55; border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); cursor: pointer; padding: 0; width: 20px; height: 20px; border-radius: 6px; font-size: 15px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.cal-cell:hover .cal-add { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.cal-add:hover { background: var(--accent); color: #fff; }
 .cal-chips { display: flex; flex-direction: column; gap: 3px; margin-top: 3px; }
-.chip { display: flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 5px; border-radius: 5px; cursor: grab; background: var(--panel-2); border-left: 3px solid var(--todo); overflow: hidden; }
+.chip { display: flex; align-items: center; gap: 4px; font-size: 11px; padding: 2px 5px; border-radius: 5px; cursor: grab; background: var(--panel-2); border-left: 3px solid var(--todo); overflow: hidden; position: relative; }
 .chip:active { cursor: grabbing; }
 .chip span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip input { width: 12px; height: 12px; accent-color: var(--done); flex: 0 0 auto; }
 .chip.done span { text-decoration: line-through; opacity: 0.6; }
 .chip.selected { outline: 1px solid var(--accent); }
 .chip .badge { font-size: 9px; padding: 0 4px; border-radius: 8px; background: rgba(0,0,0,0.3); color: #cbd5e1; }
+/* 日历任务条左右拉伸手柄（改起止日期） */
+.chip-resize { position: absolute; top: 0; bottom: 0; width: 7px; cursor: ew-resize; z-index: 2; }
+.chip-resize.l { left: -2px; }
+.chip-resize.r { right: -2px; }
+.chip-resize:hover { background: rgba(79,124,255,0.4); border-radius: 3px; }
+/* 未排期桶 */
+.cal-unscheduled { margin: 0 12px 12px; padding: 8px 10px; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--bg-soft); }
+.cal-unscheduled-head { font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+.cal-unscheduled-list { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip.unsched { cursor: grab; max-width: 220px; }
 .cal-week-view { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
 .cal-day-col { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); min-height: 240px; display: flex; flex-direction: column; }
 .cal-day-head { padding: 6px 8px; border-bottom: 1px solid var(--border-soft); font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; align-items: center; background: var(--panel); }
@@ -331,6 +355,7 @@ label { display: block; font-size: 11px; color: var(--muted); margin: 8px 0 4px;
 .hier-bar { width: 3px; align-self: stretch; border-radius: 2px; flex-shrink: 0; }
 .hier-title { flex: 1; min-width: 0; font-size: 13.5px; color: #0f172a; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hier-row.done .hier-title { text-decoration: line-through; color: #9ca3af; }
+.plan-badge { display: inline-flex; align-items: center; max-width: 160px; padding: 1px 7px; border-radius: 9px; font-size: 10.5px; line-height: 1.5; color: #6366f1; background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.25); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hier-input { flex: 1; min-width: 0; font-size: 13.5px; padding: 4px 8px; border: 1px solid #2563eb; border-radius: 6px; background: #fff; color: #0f172a; outline: none; }
 .hier-pill {
   display: inline-flex; align-items: center; gap: 5px; font-size: 11px; padding: 2px 9px;
@@ -473,6 +498,26 @@ button.gear:hover { background: var(--panel-2); border-color: var(--accent); }
 
 /* ---------- Modal (settings) ---------- */
 .modal-mask {
+  position: fixed; inset: 0; background: rgba(8,12,20,0.6); z-index: 500;
+  display: flex; align-items: center; justify-content: center; backdrop-filter: blur(3px);
+}
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(8,12,20,0.6); z-index: 500;
+  display: flex; align-items: center; justify-content: center; backdrop-filter: blur(3px);
+}
+.bulk-edit-fab {
+  position: fixed; right: 18px; bottom: 64px; z-index: 400;
+  background: var(--accent); color: #fff; border: none; border-radius: 22px;
+  padding: 10px 16px; font-size: 13px; font-weight: 600; cursor: pointer;
+  box-shadow: 0 8px 24px rgba(59,123,240,0.45);
+}
+.bulk-edit-fab:hover { background: #3d7bf0; }
+.bulk-modal { width: 520px; }
+.bulk-summary { padding: 10px 16px; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--border); }
+.bulk-grid { padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+.bulk-grid label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--text); }
+.bulk-grid select, .bulk-grid input { padding: 7px 8px; border-radius: 7px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font-size: 13px; }
+.bulk-actions { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
   position: fixed; inset: 0; background: rgba(8,12,20,0.6); z-index: 500;
   display: flex; align-items: center; justify-content: center; backdrop-filter: blur(3px);
 }

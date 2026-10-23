@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Canvas, DEFAULT_CANVAS_ID, DEFAULT_SETTINGS, DEFAULT_SHOW_IN_CALENDAR, LogEntry, ProgressMode, Settings, Source, Task, TaskKind, TrashItem, ViewId } from '../types';
-import { addDays, diffDays, maxDate, today } from '../lib/date';
+import { addDaysSafe, diffDaysSafe, maxDateSafe, today } from '../lib/date';
 import { childrenOf, descendantsOf, flattenTree, normalize, topoSort } from '../lib/schedule';
 import { blankTasks, sampleTasks } from '../lib/sample';
 
@@ -47,6 +47,12 @@ interface State {
   hideDone: boolean;
   /** 总览（三视图同屏）下的编辑面板是否展开 */
   panelOpen: boolean;
+  /** 甘特/日历：隐藏「不在日历中显示」的任务 */
+  hideNotInCal: boolean;
+  /** 每条连线的样式覆盖（key 为 edgeId，如 tree-<childId> / dep-<a>_<b>） */
+  edgeStyles: Record<string, { type: 'plain' | 'arrow' | 'dashed'; width: number }>;
+  /** 复制粘贴剪贴板：存被选中的任务 id 集合（含选区内部子树） */
+  clipboard: { ids: string[]; copyCanvas: string } | null;
 
   /** 回收站（软删除的任务树） */
   trash: TrashItem[];
@@ -75,9 +81,14 @@ interface State {
   expandAll: () => void;
   setDayWidth: (w: number) => void;
   setHideDone: (v: boolean) => void;
+  setHideNotInCal: (v: boolean) => void;
   setPanelOpen: (v: boolean) => void;
   /** 任务详情面板折叠开关 */
   setPanelCollapsed: (v: boolean) => void;
+  /** 设置单条连线样式（id 为 edgeId） */
+  setEdgeStyle: (id: string, patch: Partial<{ type: 'plain' | 'arrow' | 'dashed'; width: number }> | null) => void;
+  /** 按当前设置把全部连线样式重置为默认 */
+  resetEdgeStyles: () => void;
 
   addTask: (init: Partial<Task> & { parentId?: string | null }, meta: Meta) => string;
   addChild: (parentId: string | null, meta: Meta, kind?: TaskKind) => string;
@@ -89,7 +100,7 @@ interface State {
   /** 批量切换进度模式 */
   bulkProgressMode: (ids: string[], mode: ProgressMode, meta: Meta) => void;
   toggleDone: (id: string, meta: Meta) => void;
-  setDates: (id: string, startDate: string, dueDate: string, meta: Meta) => void;
+  setDates: (id: string, startDate: string | null, dueDate: string | null, meta: Meta) => void;
   shiftDates: (id: string, days: number, meta: Meta) => void;
   setParent: (id: string, parentId: string | null, meta: Meta) => void;
   addDependency: (id: string, depId: string, meta: Meta) => boolean;
@@ -106,9 +117,14 @@ interface State {
   bulkProgress: (ids: string[], progress: number, meta: Meta) => void;
   bulkShift: (ids: string[], days: number, meta: Meta) => void;
   bulkStatus: (ids: string[], status: Task['status'] | null, meta: Meta) => void;
+  bulkOwner: (ids: string[], owner: string, meta: Meta) => void;
   bulkRemove: (ids: string[], meta: Meta) => void;
   /** 把选中的任务按当前顺序串成依赖链：前一个完成 → 后一个开始 */
   chainDependencies: (ids: string[], meta: Meta) => void;
+  /** 复制当前选中的任务（含选区内部子树）到剪贴板 */
+  copyTasks: (ids: string[]) => void;
+  /** 粘贴剪贴板内容：重建 id，偏移位置，保持内部层级与依赖，返回新根 id 列表 */
+  pasteTasks: (meta: Meta) => string[];
 
   undo: () => void;
   redo: () => void;
@@ -127,7 +143,9 @@ interface State {
     view?: ViewId;
     dayWidth?: number;
     hideDone?: boolean;
+    hideNotInCal?: boolean;
     panelOpen?: boolean;
+    edgeStyles?: Record<string, { type: 'plain' | 'arrow' | 'dashed'; width: number }>;
     trash?: TrashItem[];
     canvases?: Canvas[];
     currentCanvasId?: string;
@@ -312,6 +330,9 @@ export const useTaskStore = create<State>()(
         log: [],
         hideDone: false,
         panelOpen: false,
+        hideNotInCal: false,
+        edgeStyles: {},
+        clipboard: null,
         trash: [],
         past: [],
         future: [],
@@ -447,8 +468,21 @@ export const useTaskStore = create<State>()(
 
         setDayWidth: (w) => set({ dayWidth: Math.min(56, Math.max(8, w)) }),
         setHideDone: (v) => set({ hideDone: v }),
+        setHideNotInCal: (v) => set({ hideNotInCal: v }),
         setPanelOpen: (v) => set({ panelOpen: v }),
         setPanelCollapsed: (v) => set((s) => ({ settings: { ...s.settings, panelCollapsed: v } })),
+        setEdgeStyle: (id, patch) =>
+          set((s) =>
+            patch === null
+              ? { edgeStyles: Object.fromEntries(Object.entries(s.edgeStyles).filter(([k]) => k !== id)) as typeof s.edgeStyles }
+              : {
+                  edgeStyles: {
+                    ...s.edgeStyles,
+                    [id]: { ...(s.edgeStyles[id] ?? { type: 'arrow' as const, width: s.settings.edgeWidth }), ...patch },
+                  },
+                },
+          ),
+        resetEdgeStyles: () => set({ edgeStyles: {} }),
 
         addTask: (init, meta) => {
           const st = get();
@@ -456,24 +490,37 @@ export const useTaskStore = create<State>()(
           const parentId = init.parentId ?? null;
           const tasks = st.tasks;
           const settings = st.settings;
-          const siblings = tasks.filter((t) => t.parentId === parentId);
-          let start = init.startDate ?? today();
-          if (!init.startDate && siblings.length) {
-            start = maxDate(start, siblings.reduce((acc, t) => maxDate(acc, addDays(t.dueDate, 1)), start));
-          }
-          if (!init.startDate && parentId) {
-            const p = tasks.find((t) => t.id === parentId);
-            if (p) start = maxDate(start, p.startDate);
-          }
-          const dur = init.dueDate ? Math.max(1, diffDays(start, init.dueDate) + 1) : settings.defaultDuration;
           const kind: TaskKind = init.kind ?? settings.defaultKind;
+          // 新计划默认无日期（未排期）；其余沿用传入或默认
+          const planNoDate = kind === 'plan' && init.startDate === undefined && init.dueDate === undefined;
+          let startDate: string | null;
+          let dueDate: string | null;
+          if (planNoDate) {
+            startDate = null;
+            dueDate = null;
+          } else {
+            const siblings = tasks.filter((t) => t.parentId === parentId);
+            let start: string | null = init.startDate ?? today();
+            if (!init.startDate && siblings.length) {
+              let mx: string | null = start;
+              for (const t of siblings) mx = maxDateSafe(mx, addDaysSafe(t.dueDate, 1));
+              start = mx;
+            }
+            if (!init.startDate && parentId) {
+              const p = tasks.find((t) => t.id === parentId);
+              if (p && p.startDate) start = maxDateSafe(start, p.startDate);
+            }
+            const dur = init.dueDate ? Math.max(1, diffDaysSafe(start, init.dueDate) + 1) : settings.defaultDuration;
+            startDate = start;
+            dueDate = init.dueDate ?? addDaysSafe(start, dur - 1);
+          }
           const task: Task = {
             id,
             title: init.title ?? (kind === 'plan' ? '新计划' : '新任务'),
             parentId,
             dependsOn: init.dependsOn ?? [],
-            startDate: start,
-            dueDate: init.dueDate ?? addDays(start, dur - 1),
+            startDate,
+            dueDate,
             startTime: init.startTime ?? '',
             endTime: init.endTime ?? '',
             progress: init.progress ?? 0,
@@ -551,15 +598,22 @@ export const useTaskStore = create<State>()(
 
         setDates: (id, startDate, dueDate, meta) => {
           const tasks = get().tasks;
-          const safe = diffDays(startDate, dueDate) < 0 ? startDate : dueDate;
-          commit(tasks.map((t) => (t.id === id ? { ...t, startDate, dueDate: safe } : t)), meta, { selectedId: id });
+          // 都为 null → 直接清空；否则若起 > 止，把止改成起（避免负工期）
+          let s = startDate;
+          let d = dueDate;
+          if (s && d && diffDaysSafe(s, d) < 0) d = s;
+          commit(tasks.map((t) => (t.id === id ? { ...t, startDate: s, dueDate: d } : t)), meta, { selectedId: id });
         },
 
         shiftDates: (id, days, meta) => {
           const tasks = get().tasks;
           const move = new Set([id, ...descendantsOf(tasks, id)]);
           commit(
-            tasks.map((t) => (move.has(t.id) ? { ...t, startDate: addDays(t.startDate, days), dueDate: addDays(t.dueDate, days) } : t)),
+            tasks.map((t) =>
+              move.has(t.id)
+                ? { ...t, startDate: addDaysSafe(t.startDate, days), dueDate: addDaysSafe(t.dueDate, days) }
+                : t,
+            ),
             meta,
             { selectedId: id },
           );
@@ -657,7 +711,7 @@ export const useTaskStore = create<State>()(
             for (const k of descendantsOf(tasks, id)) move.add(k);
           }
           commit(
-            tasks.map((t) => (move.has(t.id) ? { ...t, startDate: addDays(t.startDate, days), dueDate: addDays(t.dueDate, days) } : t)),
+            tasks.map((t) => (move.has(t.id) ? { ...t, startDate: addDaysSafe(t.startDate, days), dueDate: addDaysSafe(t.dueDate, days) } : t)),
             meta,
             { selectedIds: ids, selectedId: ids[ids.length - 1] },
           );
@@ -671,6 +725,17 @@ export const useTaskStore = create<State>()(
             tasks.map((t) => (set2.has(t.id) ? { ...t, statusLocked: status !== null, status: status ?? t.status } : t)),
             meta,
             { selectedIds: ids, selectedId: ids[ids.length - 1] },
+          );
+        },
+
+        bulkOwner: (ids, owner, meta) => {
+          if (!ids.length) return;
+          const set2 = new Set(ids);
+          const tasks = get().tasks;
+          commit(
+            tasks.map((t) => (set2.has(t.id) ? { ...t, owner } : t)),
+            meta,
+            { selectedIds: ids },
           );
         },
 
@@ -700,6 +765,73 @@ export const useTaskStore = create<State>()(
           }
           if (!linked) return;
           commit(next, meta, { selectedIds: sorted, selectedId: sorted[sorted.length - 1] });
+        },
+
+        copyTasks: (ids) => {
+          if (!ids.length) return;
+          const tasks = get().tasks;
+          const sel = new Set(ids);
+          // 选区内部子树：若某节点的祖先都在选区内，则一并复制，保持层级完整
+          const byId = new Map(tasks.map((t) => [t.id, t]));
+          const include = new Set<string>();
+          for (const id of sel) {
+            // 沿祖先链向上，若祖先全部在 sel 内则该节点纳入
+            let cur = id;
+            let ok = true;
+            while (true) {
+              const t = byId.get(cur);
+              if (!t || !t.parentId) break;
+              if (sel.has(t.parentId)) cur = t.parentId;
+              else {
+                ok = false;
+                break;
+              }
+            }
+            if (ok && !include.has(id)) include.add(id);
+          }
+          // 包含选区中节点的后代（仅在选区内的后代）
+          for (const t of tasks) {
+            if (!include.has(t.id)) continue;
+            for (const c of descendantsOf(tasks, t.id)) if (sel.has(c) || include.has(c)) include.add(c);
+          }
+          set({ clipboard: { ids: [...include], copyCanvas: get().currentCanvasId } });
+        },
+
+        pasteTasks: (meta) => {
+          const clip = get().clipboard;
+          if (!clip) return [];
+          const tasks = get().tasks;
+          const map = new Map(tasks.map((t) => [t.id, t]));
+          const clipSet = new Set(clip.ids);
+          const clipTasks = clip.ids.map((id) => map.get(id)).filter(Boolean) as Task[];
+          if (!clipTasks.length) return [];
+          // 仅保留在剪贴板内的依赖关系；跨边界依赖丢弃
+          const newId = (_old: string) => `T${Date.now().toString(36).slice(-5)}${(seq++).toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+          const idMap = new Map<string, string>();
+          clipTasks.forEach((t) => idMap.set(t.id, newId(t.id)));
+          // 计算包围盒以确定偏移
+          const xs = clipTasks.map((t) => get().positions[t.id]?.x ?? 0);
+          const ys = clipTasks.map((t) => get().positions[t.id]?.y ?? 0);
+          const minX = xs.length ? Math.min(...xs) : 0;
+          const minY = ys.length ? Math.min(...ys) : 0;
+          const OFF = 48;
+          const created: Task[] = clipTasks.map((t) => ({
+            ...t,
+            id: idMap.get(t.id)!,
+            parentId: t.parentId && clipSet.has(t.parentId) ? idMap.get(t.parentId)! : t.parentId,
+            dependsOn: t.dependsOn.filter((d) => clipSet.has(d)).map((d) => idMap.get(d)!),
+            canvasId: get().currentCanvasId,
+          }));
+          const newPositions: Record<string, { x: number; y: number }> = {};
+          clipTasks.forEach((t) => {
+            const p = get().positions[t.id];
+            newPositions[idMap.get(t.id)!] = p ? { x: p.x - minX + OFF, y: p.y - minY + OFF } : { x: OFF, y: OFF };
+          });
+          commit([...tasks, ...created], meta, {});
+          // 写入新位置（不记入撤销，属于附带信息）
+          useTaskStore.setState((s) => ({ positions: { ...s.positions, ...newPositions } }));
+          set({ selectedIds: created.map((t) => t.id) });
+          return created.map((t) => t.id);
         },
 
         undo: () => {
@@ -858,7 +990,9 @@ export const useTaskStore = create<State>()(
             view: payload.view ?? 'all',
             dayWidth: payload.dayWidth ?? 22,
             hideDone: payload.hideDone ?? false,
+            hideNotInCal: payload.hideNotInCal ?? false,
             panelOpen: payload.panelOpen ?? false,
+            edgeStyles: payload.edgeStyles ?? {},
             trash: payload.trash ?? [],
             selectedId: null,
             selectedIds: [],
@@ -881,6 +1015,7 @@ export const useTaskStore = create<State>()(
         currentCanvasId: s.currentCanvasId,
         settings: s.settings,
         positions: s.positions,
+        edgeStyles: s.edgeStyles,
       }),
       onRehydrateStorage: () => (state) => {
         if (state?.tasks?.length) {

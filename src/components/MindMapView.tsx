@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, CSSProperties } from 'react';
 import {
   Background,
   BackgroundVariant,
+  ConnectionMode,
   Controls,
   Edge,
   Handle,
@@ -23,6 +24,7 @@ import { useCanvasTasks, useTaskStore } from '../store/useTaskStore';
 import { NODE_H, NODE_W, treeLayout } from '../lib/layout';
 import { descendantsOf } from '../lib/schedule';
 import { formatCN } from '../lib/date';
+import { askDelete } from '../lib/confirmDelete';
 import ContextMenu, { MenuEntry } from './ContextMenu';
 
 export type TaskNodeData = {
@@ -101,8 +103,11 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
       style={{ borderLeftColor: color }}
       onClick={() => select(id)}
     >
-      <Handle type="target" position={Position.Left} id="t" />
-      <Handle type="source" position={Position.Right} id="s" />
+      {/* 四向连接点：任意一面都能出/入（ConnectionMode.Loose 下 source 也可作目标） */}
+      <Handle type="source" position={Position.Top} id="top" className="mm-handle" />
+      <Handle type="source" position={Position.Right} id="right" className="mm-handle" />
+      <Handle type="source" position={Position.Bottom} id="bottom" className="mm-handle" />
+      <Handle type="source" position={Position.Left} id="left" className="mm-handle" />
 
       <div className="node-actions">
         <button title="新增子任务" onClick={(e) => { e.stopPropagation(); addChild(id, { source: 'mind', action: '思维导图新增子任务', detail: `挂在「${task.title}」下` }); }}>
@@ -114,7 +119,7 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
         <button title="连接：创建新节点 或 链接已有节点" className="linkbtn" onClick={(e) => { e.stopPropagation(); setConnect((v) => (v ? null : 'new')); }}>
           ⇢
         </button>
-        <button title="删除节点（含子任务）" onClick={(e) => { e.stopPropagation(); removeTask(id, { source: 'mind', action: '删除节点', detail: task.title }); }}>
+        <button title="删除节点（含子任务）" onClick={(e) => { e.stopPropagation(); if (askDelete(`删除「${task.title}」？三视图将同步移除。`)) removeTask(id, { source: 'mind', action: '删除节点', detail: task.title }); }}>
           ×
         </button>
       </div>
@@ -194,11 +199,11 @@ function TaskNodeCard({ id, data, selected }: NodeProps<TaskFlowNode>) {
         <div className="nodrag node-date-editor" onClick={(e) => e.stopPropagation()}>
           <label>
             开始
-            <input type="date" value={task.startDate} onChange={(e) => e.target.value && setDates(id, e.target.value, task.dueDate, { source: 'mind', action: '修改开始日', detail: `${task.title} → ${e.target.value}` })} />
+            <input type="date" value={task.startDate ?? ''} onChange={(e) => e.target.value && setDates(id, e.target.value, task.dueDate, { source: 'mind', action: '修改开始日', detail: `${task.title} → ${e.target.value}` })} />
           </label>
           <label>
             截止
-            <input type="date" value={task.dueDate} onChange={(e) => e.target.value && setDates(id, task.startDate, e.target.value, { source: 'mind', action: '修改截止日', detail: `${task.title} → ${e.target.value}` })} />
+            <input type="date" value={task.dueDate ?? ''} onChange={(e) => e.target.value && setDates(id, task.startDate, e.target.value, { source: 'mind', action: '修改截止日', detail: `${task.title} → ${e.target.value}` })} />
           </label>
           <label>
             起
@@ -262,6 +267,9 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
   const positions = useTaskStore((s) => s.positions);
   const setPositions = useTaskStore((s) => s.setPositions);
   const lockPositions = useTaskStore((s) => s.settings.lockPositions);
+  const settings = useTaskStore((s) => s.settings);
+  const edgeStyles = useTaskStore((s) => s.edgeStyles);
+  const setEdgeStyle = useTaskStore((s) => s.setEdgeStyle);
   const showMinimap = useTaskStore((s) => s.settings.showMinimap);
   const setSettings = useTaskStore((s) => s.setSettings);
   const collapsed = useTaskStore((s) => s.collapsed);
@@ -290,6 +298,9 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
   const bulkCalendar = useTaskStore((s) => s.bulkCalendar);
   const undo = useTaskStore((s) => s.undo);
   const redo = useTaskStore((s) => s.redo);
+  const copyTasks = useTaskStore((s) => s.copyTasks);
+  const pasteTasks = useTaskStore((s) => s.pasteTasks);
+  const clipboard = useTaskStore((s) => s.clipboard);
   const canUndo = useTaskStore((s) => s.past.length > 0);
   const canRedo = useTaskStore((s) => s.future.length > 0);
   const { fitView } = useReactFlow();
@@ -297,6 +308,8 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
   const [nodes, setNodes, onNodesChange] = useNodesState<TaskFlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  const [edgeEdit, setEdgeEdit] = useState<string | null>(null);
+  const [edgeEditPos, setEdgeEditPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const nodesRef = useRef<TaskFlowNode[]>([]);
   nodesRef.current = nodes;
@@ -347,6 +360,29 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 复制 / 粘贴快捷键（Ctrl/Cmd+C / V）：框选节点后复制，再粘贴为新子树
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      if (e.key.toLowerCase() === 'c') {
+        if (selectedIds.length) {
+          copyTasks(selectedIds);
+          e.preventDefault();
+        }
+      } else if (e.key.toLowerCase() === 'v') {
+        if (clipboard) {
+          pasteTasks({ source: 'mind', action: '粘贴节点', detail: `复制 ${clipboard.ids.length} 项` });
+          e.preventDefault();
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedIds, copyTasks, pasteTasks, clipboard]);
+
   // 固化新节点位置：独立 effect，只依赖 tasks（不依赖 positions，避免无限循环）
   useEffect(() => {
     if (!lockPositions) return;
@@ -393,17 +429,53 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
       }));
     setNodes(next);
 
+    // 节点中心位置表（用于智能选 Handle）
+    const posMap = new Map<string, { x: number; y: number }>();
+    for (const n of next) posMap.set(n.id, n.position);
+
+    // 依据两节点相对位置，选最近的连接面（上/右/下/左）
+    const chooseHandles = (sid: string, tid: string): { sourceHandle: string; targetHandle: string } => {
+      const a = posMap.get(sid);
+      const b = posMap.get(tid);
+      if (!a || !b) return { sourceHandle: 'right', targetHandle: 'left' };
+      const acx = a.x + NODE_W / 2;
+      const acy = a.y + NODE_H / 2;
+      const bcx = b.x + NODE_W / 2;
+      const bcy = b.y + NODE_H / 2;
+      const dx = bcx - acx;
+      const dy = bcy - acy;
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        return dx >= 0 ? { sourceHandle: 'right', targetHandle: 'left' } : { sourceHandle: 'left', targetHandle: 'right' };
+      }
+      return dy >= 0 ? { sourceHandle: 'bottom', targetHandle: 'top' } : { sourceHandle: 'top', targetHandle: 'bottom' };
+    };
+
+    // 计算单条边的样式：逐条 edgeStyles 优先，否则取全局默认（树边=箭头指向子级；依赖边=虚线箭头）
+    const styleFor = (eid: string, kind: 'tree' | 'dep', isCrit: boolean) => {
+      const ov = edgeStyles[eid];
+      const type = ov?.type ?? (kind === 'tree' ? settings.edgeDefaultTree : settings.edgeDefaultDep);
+      const width = ov?.width ?? settings.edgeWidth;
+      const color = kind === 'tree' ? '#3a4a6b' : isCrit ? '#f97316' : '#8b7cf6';
+      const style: CSSProperties = { stroke: color, strokeWidth: width };
+      if (type === 'dashed') style.strokeDasharray = '6 4';
+      const markerEnd = type === 'arrow' ? { type: MarkerType.ArrowClosed, color, width: 14, height: 14 } : undefined;
+      return { style, markerEnd };
+    };
+
     const nextEdges: Edge[] = [];
     for (const t of tasks) {
       if (t.parentId && vis.has(t.id) && vis.has(t.parentId)) {
+        const h = chooseHandles(t.parentId, t.id);
+        const { style, markerEnd } = styleFor(`tree-${t.id}`, 'tree', false);
         nextEdges.push({
           id: `tree-${t.id}`,
           source: t.parentId,
           target: t.id,
-          sourceHandle: 's',
-          targetHandle: 't',
+          sourceHandle: h.sourceHandle,
+          targetHandle: h.targetHandle,
           type: 'smoothstep',
-          style: { stroke: '#3a4a6b', strokeWidth: 1.6 },
+          style,
+          markerEnd,
         });
       }
     }
@@ -416,24 +488,26 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
         const key = `${from}->${to}`;
         if (seen.has(key) || key === `${to}->${from}`) continue;
         seen.add(key);
-        const isCrit = derived[dep]?.critical && derived[t.id]?.critical;
+        const isCrit = !!derived[dep]?.critical && !!derived[t.id]?.critical;
+        const h = chooseHandles(from, to);
+        const { style, markerEnd } = styleFor(`dep-${key}`, 'dep', isCrit);
         nextEdges.push({
           id: `dep-${key}`,
           source: from,
           target: to,
-          sourceHandle: 's',
-          targetHandle: 't',
+          sourceHandle: h.sourceHandle,
+          targetHandle: h.targetHandle,
           type: 'smoothstep',
           animated: true,
-          style: { stroke: isCrit ? '#f97316' : '#8b7cf6', strokeWidth: isCrit ? 2.4 : 1.6, strokeDasharray: '5 4' },
-          markerEnd: { type: MarkerType.ArrowClosed, color: isCrit ? '#f97316' : '#8b7cf6', width: 14, height: 14 },
+          style,
+          markerEnd,
           label: isCrit ? '关键路径' : undefined,
           labelStyle: { fill: '#f97316', fontSize: 10 },
         });
       }
     }
     setEdges(nextEdges);
-  }, [tasks, collapsed, selectedIds, derived, renamingId, positions, lockPositions, setNodes, setEdges]);
+  }, [tasks, collapsed, selectedIds, derived, renamingId, positions, lockPositions, settings, edgeStyles, setNodes, setEdges]);
 
   useEffect(() => {
     const t = setTimeout(() => fitView({ padding: 0.18, duration: 250 }), 80);
@@ -534,7 +608,7 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
       },
       { kind: 'item', label: '展开这些节点', onClick: () => bulkCollapse(ids, false) },
       { kind: 'sep' },
-      { kind: 'item', label: `删除这 ${n} 项（含子任务）`, danger: true, onClick: () => { if (confirm(`删除选中的 ${n} 个任务？三视图将同步移除。`)) bulkRemove(ids, { source: 'mind', action: '批量删除', detail: `${n} 项` }); } },
+      { kind: 'item', label: `删除这 ${n} 项（含子任务）`, danger: true, onClick: () => { if (askDelete(`删除选中的 ${n} 个任务？三视图将同步移除。`)) bulkRemove(ids, { source: 'mind', action: '批量删除', detail: `${n} 项` }); } },
       { kind: 'item', label: '取消选择', onClick: () => setSelection([]) },
     ];
   };
@@ -573,7 +647,7 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
       { kind: 'item', label: '在甘特图中定位', onClick: () => goto('gantt', id) },
       { kind: 'item', label: '在日历中定位', onClick: () => goto('calendar', id) },
       { kind: 'sep' },
-      { kind: 'item', label: '删除（含子任务）', danger: true, onClick: () => { if (confirm(`删除「${t.title}」？三视图将同步移除。`)) removeTask(id, { source: 'mind', action: '删除节点', detail: t.title }); } },
+      { kind: 'item', label: '删除（含子任务）', danger: true, onClick: () => { if (askDelete(`删除「${t.title}」？三视图将同步移除。`)) removeTask(id, { source: 'mind', action: '删除节点', detail: t.title }); } },
     ];
   };
 
@@ -625,8 +699,13 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeDragStop={onNodeDragStop}
-        onNodeClick={(_e, n) => select(n.id)}
+        onNodeClick={(_e, n) => { setEdgeEdit(null); select(n.id); }}
         onConnect={onConnect}
+        connectionMode={ConnectionMode.Loose}
+        onEdgeClick={(_e, ed) => {
+          setEdgeEdit(ed.id);
+          setEdgeEditPos({ x: _e.clientX, y: _e.clientY });
+        }}
         onNodesDelete={(ns) => ns.forEach((n) => removeTask(n.id, { source: 'mind', action: '删除节点', detail: titleOf(n.id) }))}
         onEdgesDelete={(es) =>
           es.forEach((e) => {
@@ -637,6 +716,7 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
         }
         onPaneClick={() => {
           setMenu(null);
+          setEdgeEdit(null);
           // 设置项：框选后点击空白处是否取消选择。关闭时保留框选。
           if (useTaskStore.getState().settings.clearSelOnOutsideClick) select(null);
         }}
@@ -674,6 +754,20 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
           <button onClick={() => addChild(null, { source: 'mind', action: '新建顶层课题', detail: '新课题' })}>+ 新建课题</button>
           <button
             disabled={!selectedIds.length}
+            onClick={() => selectedIds.length && copyTasks(selectedIds)}
+            title="复制选中的节点（含选区内完整子树）"
+          >
+            复制
+          </button>
+          <button
+            disabled={!clipboard}
+            onClick={() => clipboard && pasteTasks({ source: 'mind', action: '粘贴节点', detail: `复制 ${clipboard?.ids.length ?? 0} 项` })}
+            title="粘贴为新的节点子树"
+          >
+            粘贴
+          </button>
+          <button
+            disabled={!selectedIds.length}
             onClick={() => selectedIds[0] && addChild(selectedIds[0], { source: 'mind', action: '新增子任务', detail: titleOf(selectedIds[0]) })}
           >
             + 子任务
@@ -709,6 +803,13 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
       {selectedIds.length > 1 && (
         <div className="mind-selbar">
           已框选 <b>{selectedIds.length}</b> 项 · 右键单击可批量操作
+          <button onClick={() => copyTasks(selectedIds)} title="复制选中节点">复制</button>
+          <button
+            disabled={!clipboard}
+            onClick={() => clipboard && pasteTasks({ source: 'mind', action: '粘贴节点', detail: `复制 ${clipboard?.ids.length ?? 0} 项` })}
+          >
+            粘贴
+          </button>
           <button onClick={() => bulkProgress(selectedIds, 100, { source: 'mind', action: '批量完成', detail: `${selectedIds.length} 项` })}>全部完成</button>
           <button onClick={() => bulkCollapse(selectedIds, true)}>折叠</button>
           <button onClick={() => bulkCollapse(selectedIds, false)}>展开</button>
@@ -717,7 +818,7 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
           <button
             className="danger"
             onClick={() => {
-              if (confirm(`删除选中的 ${selectedIds.length} 个任务？三视图将同步移除。`))
+              if (askDelete(`删除选中的 ${selectedIds.length} 个任务？三视图将同步移除。`))
                 bulkRemove(selectedIds, { source: 'mind', action: '批量删除', detail: `${selectedIds.length} 项` });
             }}
           >
@@ -746,6 +847,44 @@ function MindMapInner({ derived, compact }: { derived: Record<string, Derived>; 
           </div>
         </>
       )}
+
+      {edgeEdit && (() => {
+        const ek = edgeEdit.startsWith('tree-') ? 'tree' : 'dep';
+        const eov = edgeStyles[edgeEdit];
+        const curType = eov?.type ?? (ek === 'tree' ? settings.edgeDefaultTree : settings.edgeDefaultDep);
+        const curWidth = eov?.width ?? settings.edgeWidth;
+        return (
+          <div
+            className="edge-edit"
+            style={{ position: 'fixed', left: Math.min(edgeEditPos.x, window.innerWidth - 240), top: Math.min(edgeEditPos.y, window.innerHeight - 180), zIndex: 60 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="edge-edit-title">连线样式</div>
+            <div className="edge-edit-row">
+              {(['plain', 'arrow', 'dashed'] as const).map((tp) => (
+                <button key={tp} className={curType === tp ? 'active' : ''} onClick={() => setEdgeStyle(edgeEdit, { type: tp })}>
+                  {tp === 'plain' ? '实线' : tp === 'arrow' ? '箭头' : '虚线'}
+                </button>
+              ))}
+            </div>
+            <label className="edge-edit-row">
+              粗细 <b>{Math.round(curWidth * 10) / 10}</b>
+              <input
+                type="range"
+                min={0.5}
+                max={5}
+                step={0.2}
+                value={curWidth}
+                onChange={(e) => setEdgeStyle(edgeEdit, { width: Number(e.target.value) })}
+              />
+            </label>
+            <div className="edge-edit-row">
+              <button onClick={() => setEdgeStyle(edgeEdit, null)}>恢复默认</button>
+              <button onClick={() => setEdgeEdit(null)}>关闭</button>
+            </div>
+          </div>
+        );
+      })()}
 
       {menu && <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} onClose={() => setMenu(null)} />}
     </div>

@@ -11,7 +11,7 @@ const SRC_LABEL: Record<Source, string> = {
 };
 
 /** 构建版本戳：每次发布改这里，方便确认线上是否部署到了最新版 */
-const BUILD = '2026-10-21-minimap';
+const BUILD = '2026-10-21-batch';
 
 export default function StatusBar({ derived }: { derived: Record<string, Derived> }) {
   const log = useTaskStore((s) => s.log);

@@ -9,6 +9,7 @@ import HierarchyView from './components/HierarchyView';
 import OverviewView from './components/OverviewView';
 import TaskPanel from './components/TaskPanel';
 import StatusBar from './components/StatusBar';
+import BulkEditModal from './components/BulkEditModal';
 
 export default function App() {
   const tasks = useCanvasTasks();
@@ -78,6 +79,7 @@ export default function App() {
         {view !== 'all' || panelOpen ? <TaskPanel derived={derived} /> : null}
       </div>
       <StatusBar derived={derived} />
+      <BulkEditModal />
     </div>
   );
 }

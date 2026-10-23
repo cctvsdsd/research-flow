@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ViewId } from '../types';
 import { useTaskStore, useCanvasTasks } from '../store/useTaskStore';
 import { initCloudSync, onCloudStatus, cloudSyncNow, CloudStatus } from '../lib/cloud-sync';
+import { askDelete } from '../lib/confirmDelete';
 import TrashDrawer from './TrashDrawer';
 import SettingsModal from './SettingsModal';
 
@@ -143,7 +144,7 @@ export default function TopBar() {
           <button className="ghost" onClick={() => confirm('载入示例课题会覆盖当前画布数据，继续？') && resetSample()}>
             载入示例
           </button>
-          <button className="ghost" onClick={() => confirm('确认清空当前画布全部任务？（已删除的项会进入回收站）') && clearAll()}>
+          <button className="ghost" onClick={() => askDelete('确认清空当前画布全部任务？（已删除的项会进入回收站）') && clearAll()}>
             清空
           </button>
           <button className="gear" onClick={() => setSettingsOpen(true)} title="默认参数 / 画布管理">
